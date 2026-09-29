@@ -1,0 +1,374 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  FACULTY
+  CR
+  STUDENT
+}
+
+enum AnnouncementPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum SubmissionStatus {
+  PENDING
+  SUBMITTED
+  GRADED
+  LATE
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE
+  TRUE_FALSE
+}
+
+// -------------------------------------------------------------
+// Core User & Profiles
+// -------------------------------------------------------------
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  password     String
+  role         Role      @default(STUDENT)
+  name         String
+  phone        String?
+  avatarUrl    String?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  studentProfile   StudentProfile?
+  facultyProfile   FacultyProfile?
+  crProfile        CRProfile?
+
+  // Authored items
+  announcements    Announcement[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+  resourcesUploaded Resource[]
+  assignmentsCreated Assignment[]
+  quizzesCreated   Quiz[]
+  gradesGiven      Grade[]
+}
+
+model StudentProfile {
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rollNumber     String    @unique
+  batchYear      Int
+  departmentId   String
+  department     Department @relation(fields: [departmentId], references: [id])
+  semesterId     String
+  semester       Semester   @relation(fields: [semesterId], references: [id])
+  sectionId      String?
+  section        Section?   @relation(fields: [sectionId], references: [id])
+
+  crProfile      CRProfile?
+  enrollments    Enrollment[]
+  submissions    AssignmentSubmission[]
+  quizAttempts   QuizAttempt[]
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model FacultyProfile {
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employeeId     String    @unique
+  designation    String
+  departmentId   String
+  department     Department @relation(fields: [departmentId], references: [id])
+
+  subjects       Subject[]
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model CRProfile {
+  id               String         @id @default(uuid())
+  userId           String         @unique
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studentProfileId String         @unique
+  studentProfile   StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  sectionId        String
+  section          Section        @relation(fields: [sectionId], references: [id])
+  term             String         @default("2026-2027")
+
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+}
+
+// -------------------------------------------------------------
+// Academic Hierarchy
+// -------------------------------------------------------------
+model Department {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  code        String           @unique
+  description String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  students    StudentProfile[]
+  faculties   FacultyProfile[]
+  sections    Section[]
+  subjects    Subject[]
+  announcements Announcement[]
+}
+
+model Semester {
+  id           String           @id @default(uuid())
+  number       Int              @unique
+  name         String
+  academicYear String
+  isActive     Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  students     StudentProfile[]
+  sections     Section[]
+  subjects     Subject[]
+}
+
+model Section {
+  id           String           @id @default(uuid())
+  name         String
+  departmentId String
+  department   Department       @relation(fields: [departmentId], references: [id])
+  semesterId   String
+  semester     Semester         @relation(fields: [semesterId], references: [id])
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  students     StudentProfile[]
+  crProfiles   CRProfile[]
+  enrollments  Enrollment[]
+  announcements Announcement[]
+
+  @@unique([name, departmentId, semesterId])
+}
+
+model Subject {
+  id           String           @id @default(uuid())
+  name         String
+  code         String           @unique
+  credits      Int              @default(3)
+  departmentId String
+  department   Department       @relation(fields: [departmentId], references: [id])
+  semesterId   String
+  semester     Semester         @relation(fields: [semesterId], references: [id])
+  facultyId    String?
+  faculty      FacultyProfile?  @relation(fields: [facultyId], references: [id])
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  modules      Module[]
+  enrollments  Enrollment[]
+  resources    Resource[]
+  assignments  Assignment[]
+  quizzes      Quiz[]
+}
+
+model Module {
+  id          String     @id @default(uuid())
+  title       String
+  description String?
+  orderIndex  Int        @default(1)
+  subjectId   String
+  subject     Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  resources   Resource[]
+}
+
+model Enrollment {
+  id          String         @id @default(uuid())
+  studentId   String
+  student     StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subjectId   String
+  subject     Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  sectionId   String?
+  section     Section?       @relation(fields: [sectionId], references: [id])
+  status      String         @default("ACTIVE") // ACTIVE, DROPPED, COMPLETED
+  enrolledAt  DateTime       @default(now())
+
+  @@unique([studentId, subjectId])
+}
+
+// -------------------------------------------------------------
+// Resources & Materials
+// -------------------------------------------------------------
+model Resource {
+  id           String    @id @default(uuid())
+  title        String
+  description  String?
+  fileUrl      String
+  fileType     String    @default("PDF") // PDF, NOTES, SLIDES, LINK
+  subjectId    String
+  subject      Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  moduleId     String?
+  module       Module?   @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+  uploadedById String
+  uploadedBy   User      @relation(fields: [uploadedById], references: [id])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+// -------------------------------------------------------------
+// Assignments & Submissions
+// -------------------------------------------------------------
+model Assignment {
+  id          String                 @id @default(uuid())
+  title       String
+  description String
+  dueDate     DateTime
+  totalMarks  Float                  @default(100)
+  subjectId   String
+  subject     Subject                @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User                   @relation(fields: [createdById], references: [id])
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  submissions AssignmentSubmission[]
+}
+
+model AssignmentSubmission {
+  id           String           @id @default(uuid())
+  assignmentId String
+  assignment   Assignment       @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  studentId    String
+  student      StudentProfile   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  fileUrl      String?
+  content      String?
+  status       SubmissionStatus @default(SUBMITTED)
+  submittedAt  DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  grade        Grade?
+
+  @@unique([assignmentId, studentId])
+}
+
+model Grade {
+  id            String               @id @default(uuid())
+  submissionId  String               @unique
+  submission    AssignmentSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  marksObtained Float
+  feedback      String?
+  gradedById    String
+  gradedBy      User                 @relation(fields: [gradedById], references: [id])
+  gradedAt      DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+}
+
+// -------------------------------------------------------------
+// Quizzes & Assessment
+// -------------------------------------------------------------
+model Quiz {
+  id               String        @id @default(uuid())
+  title            String
+  description      String?
+  timeLimitMinutes Int           @default(30)
+  totalMarks       Float         @default(50)
+  isPublished      Boolean       @default(false)
+  dueDate          DateTime?
+  subjectId        String
+  subject          Subject       @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  createdById      String
+  createdBy        User          @relation(fields: [createdById], references: [id])
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  questions        Question[]
+  attempts         QuizAttempt[]
+}
+
+model Question {
+  id            String       @id @default(uuid())
+  quizId        String
+  quiz          Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  questionText  String
+  questionType  QuestionType @default(MULTIPLE_CHOICE)
+  optionsJson   String // JSON array of options e.g. ["Option A", "Option B", ...]
+  correctAnswer String // e.g. "0" or "Option A"
+  marks         Float        @default(5)
+  orderIndex    Int          @default(1)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+model QuizAttempt {
+  id          String    @id @default(uuid())
+  quizId      String
+  quiz        Quiz      @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  studentId   String
+  student     StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  score       Float     @default(0)
+  answersJson String    @default("{}") // JSON map of questionId -> student selected answer
+  status      String    @default("COMPLETED") // IN_PROGRESS, COMPLETED
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@unique([quizId, studentId])
+}
+
+// -------------------------------------------------------------
+// Announcements, Notifications & Audit
+// -------------------------------------------------------------
+model Announcement {
+  id           String               @id @default(uuid())
+  title        String
+  content      String
+  priority     AnnouncementPriority @default(MEDIUM)
+  targetRole   Role? // NULL means all roles
+  departmentId String?
+  department   Department?          @relation(fields: [departmentId], references: [id])
+  sectionId    String?
+  section      Section?             @relation(fields: [sectionId], references: [id])
+  authorId     String
+  author       User                 @relation(fields: [authorId], references: [id])
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  entity    String
+  entityId  String?
+  details   String? // JSON or text details
+  ipAddress String?
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  timestamp DateTime @default(now())
+}
