@@ -15,6 +15,9 @@ import {
   GraduationCap,
   X,
   Sparkles,
+  MessageSquare,
+  Building2,
+  BarChart2,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -31,6 +34,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       label: 'Dashboard',
       path: '/app/dashboard',
       icon: LayoutDashboard,
+      roles: ['ADMIN', 'FACULTY', 'CR', 'STUDENT'],
+    },
+    {
+      label: 'Academic Analytics',
+      path: '/app/analytics',
+      icon: BarChart2,
       roles: ['ADMIN', 'FACULTY', 'CR', 'STUDENT'],
     },
     {
@@ -52,16 +61,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       roles: ['ADMIN', 'FACULTY', 'CR', 'STUDENT'],
     },
     {
+      label: 'AI Learning Suite',
+      path: '/app/ai-assistant',
+      icon: Sparkles,
+      roles: ['ADMIN', 'FACULTY', 'CR', 'STUDENT'],
+    },
+    {
+      label: '💬 Doubt Hub',
+      path: '/app/doubts',
+      icon: MessageSquare,
+      roles: ['ADMIN', 'FACULTY', 'CR', 'STUDENT'],
+    },
+    {
       label: 'Announcements',
       path: '/app/announcements',
       icon: Megaphone,
       roles: ['ADMIN', 'FACULTY', 'CR', 'STUDENT'],
     },
     {
-      label: 'Resource Repository',
+      label: 'Resource Vault & PYQ',
       path: '/app/resources',
       icon: FolderArchive,
       roles: ['ADMIN', 'FACULTY', 'CR', 'STUDENT'],
+    },
+    {
+      label: 'Academic Structure',
+      path: '/app/academic',
+      icon: Building2,
+      roles: ['ADMIN'],
     },
     {
       label: 'User Directory',

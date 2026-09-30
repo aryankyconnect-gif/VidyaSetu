@@ -24,6 +24,10 @@ import { AnnouncementsPage } from './pages/app/AnnouncementsPage';
 import { ResourcesPage } from './pages/app/ResourcesPage';
 import { UsersPage } from './pages/app/UsersPage';
 import { ProfilePage } from './pages/app/ProfilePage';
+import { AIAssistantPage } from './pages/app/AIAssistantPage';
+import { DoubtHubPage } from './pages/app/DoubtHubPage';
+import { AcademicStructurePage } from './pages/app/AcademicStructurePage';
+import { AcademicAnalyticsPage } from './pages/app/AcademicAnalyticsPage';
 
 export const App: React.FC = () => {
   return (
@@ -34,6 +38,7 @@ export const App: React.FC = () => {
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/unauthorized" element={<UnauthorizedPage />} />
+      <Route path="/doubts" element={<Navigate to="/app/doubts" replace />} />
 
       {/* Protected App Routes */}
       <Route
@@ -46,14 +51,25 @@ export const App: React.FC = () => {
       >
         <Route index element={<Navigate to="/app/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
+        <Route path="analytics" element={<AcademicAnalyticsPage />} />
         <Route path="subjects" element={<SubjectsPage />} />
         <Route path="subjects/:id" element={<SubjectDetailPage />} />
         <Route path="assignments" element={<AssignmentsPage />} />
         <Route path="assignments/:id" element={<AssignmentsPage />} />
         <Route path="quizzes" element={<QuizzesPage />} />
         <Route path="quizzes/:id" element={<QuizzesPage />} />
+        <Route path="ai-assistant" element={<AIAssistantPage />} />
+        <Route path="doubts" element={<DoubtHubPage />} />
         <Route path="announcements" element={<AnnouncementsPage />} />
         <Route path="resources" element={<ResourcesPage />} />
+        <Route
+          path="academic"
+          element={
+            <ProtectedRoute allowedRoles={['ADMIN']}>
+              <AcademicStructurePage />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="users"
           element={

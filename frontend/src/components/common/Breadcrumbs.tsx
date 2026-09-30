@@ -12,6 +12,7 @@ export const Breadcrumbs: React.FC = () => {
     subjects: 'Subjects',
     assignments: 'Assignments',
     quizzes: 'Quizzes',
+    doubts: 'Doubt Hub',
     announcements: 'Announcements',
     resources: 'Resources',
     users: 'Users',

@@ -26,16 +26,27 @@ export const errorHandler = (
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _next: NextFunction
 ) => {
+  const isHttpError = err instanceof HttpError || (err as HttpError).status !== undefined;
   const status = (err as HttpError).status || 500;
-  const message = err.message || 'Internal Server Error';
+  const rawMessage = err.message || 'Internal Server Error';
   const details = (err as HttpError).details;
 
-  logger.error(`[${req.method}] ${req.originalUrl} - ${status} - ${message}`);
+  logger.error(`[${req.method}] ${req.originalUrl} - ${status} - ${rawMessage}`);
+
+  // Never expose Prisma, database connection strings, or internal errors to client
+  let clientMessage = rawMessage;
+  const isInternalOrDbError =
+    !isHttpError ||
+    status >= 500 ||
+    /prisma|postgresql|database|connection|localhost:\d+|findUnique/i.test(rawMessage);
+
+  if (isInternalOrDbError && status >= 500) {
+    clientMessage = 'Service is temporarily unavailable. Please try again shortly.';
+  }
 
   res.status(status).json({
     success: false,
-    message,
+    message: clientMessage,
     ...(details ? { errors: details } : {}),
-    ...(process.env.NODE_ENV === 'development' ? { stack: err.stack } : {}),
   });
 };

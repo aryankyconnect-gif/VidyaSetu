@@ -15,6 +15,8 @@ import announcementRouter from './routes/announcement.routes';
 import notificationRouter from './routes/notification.routes';
 import dashboardRouter from './routes/dashboard.routes';
 import aiRouter from './routes/ai.routes';
+import doubtRouter from './routes/doubt.routes';
+import analyticsRouter from './routes/analytics.routes';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { logger } from './utils/logger';
 
@@ -61,6 +63,8 @@ app.use('/api/announcements', announcementRouter);
 app.use('/api/notifications', notificationRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/ai', aiRouter);
+app.use('/api/doubts', doubtRouter);
+app.use('/api/analytics', analyticsRouter);
 
 // 404 & Centralized Error Handling
 app.use(notFoundHandler);

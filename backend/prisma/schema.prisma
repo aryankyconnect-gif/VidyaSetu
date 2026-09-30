@@ -35,6 +35,13 @@ enum QuestionType {
   TRUE_FALSE
 }
 
+enum DoubtStatus {
+  OPEN
+  IN_DISCUSSION
+  ANSWERED
+  RESOLVED
+}
+
 // -------------------------------------------------------------
 // Core User & Profiles
 // -------------------------------------------------------------
@@ -62,6 +69,8 @@ model User {
   assignmentsCreated Assignment[]
   quizzesCreated   Quiz[]
   gradesGiven      Grade[]
+  doubtMessages    DoubtMessage[]
+  doubtAttachments DoubtAttachment[]
 }
 
 model StudentProfile {
@@ -81,6 +90,7 @@ model StudentProfile {
   enrollments    Enrollment[]
   submissions    AssignmentSubmission[]
   quizAttempts   QuizAttempt[]
+  doubts         Doubt[]
 
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -96,6 +106,7 @@ model FacultyProfile {
   department     Department @relation(fields: [departmentId], references: [id])
 
   subjects       Subject[]
+  doubts         Doubt[]
 
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -130,21 +141,26 @@ model Department {
   faculties   FacultyProfile[]
   sections    Section[]
   subjects    Subject[]
+  semesters   Semester[]
   announcements Announcement[]
 }
 
 model Semester {
   id           String           @id @default(uuid())
-  number       Int              @unique
+  number       Int
   name         String
   academicYear String
   isActive     Boolean          @default(true)
+  departmentId String?
+  department   Department?      @relation(fields: [departmentId], references: [id], onDelete: Cascade)
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
 
   students     StudentProfile[]
   sections     Section[]
   subjects     Subject[]
+
+  @@index([number, departmentId])
 }
 
 model Section {
@@ -184,6 +200,8 @@ model Subject {
   resources    Resource[]
   assignments  Assignment[]
   quizzes      Quiz[]
+  aiQuestions  AiQuestionBank[]
+  doubts       Doubt[]
 }
 
 model Module {
@@ -221,7 +239,10 @@ model Resource {
   title        String
   description  String?
   fileUrl      String
-  fileType     String    @default("PDF") // PDF, NOTES, SLIDES, LINK
+  fileType     String    @default("PDF") // PDF, NOTES, SLIDES, LINK, PPT, PYQ, VIDEO, REFERENCE, DOCUMENT
+  fileSize     String?
+  year         Int?
+  isPublished  Boolean   @default(true)
   subjectId    String
   subject      Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   moduleId     String?
@@ -236,34 +257,43 @@ model Resource {
 // Assignments & Submissions
 // -------------------------------------------------------------
 model Assignment {
-  id          String                 @id @default(uuid())
-  title       String
-  description String
-  dueDate     DateTime
-  totalMarks  Float                  @default(100)
-  subjectId   String
-  subject     Subject                @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  createdById String
-  createdBy   User                   @relation(fields: [createdById], references: [id])
-  createdAt   DateTime               @default(now())
-  updatedAt   DateTime               @updatedAt
+  id               String   @id @default(uuid())
+  title            String
+  description      String
+  instructions     String?
+  startDate        DateTime?
+  dueDate          DateTime
+  totalMarks       Float    @default(100)
+  maxFileSizeMB    Int?      // maximum file size in MB
+  allowedFormats   String?   // JSON array of allowed MIME types
+  maxAttempts      Int?      // null = unlimited attempts
+  isPublished      Boolean   @default(false)
+  allowedSubmissions Boolean @default(true) // allow submissions until deadline
+  subjectId        String
+  subject          Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  createdById      String
+  createdBy        User      @relation(fields: [createdById], references: [id])
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  submissions AssignmentSubmission[]
+  submissions      AssignmentSubmission[]
 }
 
 model AssignmentSubmission {
-  id           String           @id @default(uuid())
-  assignmentId String
-  assignment   Assignment       @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  studentId    String
-  student      StudentProfile   @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  fileUrl      String?
-  content      String?
-  status       SubmissionStatus @default(SUBMITTED)
-  submittedAt  DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
+  id               String           @id @default(uuid())
+  assignmentId     String
+  assignment       Assignment       @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  studentId        String
+  student          StudentProfile   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  fileUrl          String?
+  content          String?
+  similarityScore  Float?           // percentage e.g. 14.5%
+  similarityReport String?          // description e.g. "Low similarity - Original work"
+  status           SubmissionStatus @default(SUBMITTED)
+  submittedAt      DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
-  grade        Grade?
+  grade            Grade?
 
   @@unique([assignmentId, studentId])
 }
@@ -372,3 +402,99 @@ model AuditLog {
   user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   timestamp DateTime @default(now())
 }
+
+// -------------------------------------------------------------
+// AI Question Bank & Deduplication
+// -------------------------------------------------------------
+model AiQuestionBank {
+  id            String    @id @default(uuid())
+  subjectId     String?
+  subject       Subject?  @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  topic         String
+  difficulty    String    @default("MEDIUM") // EASY, MEDIUM, HARD
+  question      String
+  optionsJson   String    // JSON array of 4 options e.g. ["Option A", "Option B", "Option C", "Option D"]
+  correctAnswer String    // Correct answer option string
+  explanation   String?
+  source        String    @default("GEMINI") // GEMINI, MANUAL
+  usageCount    Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([topic, difficulty])
+  @@index([subjectId])
+}
+
+// -------------------------------------------------------------
+// Help Desk / Doubt Hub
+// -------------------------------------------------------------
+model Doubt {
+  id          String         @id @default(uuid())
+  title       String
+  description String
+  topic       String
+  status      DoubtStatus    @default(OPEN)
+
+  subjectId   String
+  subject     Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  studentId   String
+  student     StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  facultyId   String?
+  faculty     FacultyProfile? @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+
+  messages    DoubtMessage[]
+  attachments DoubtAttachment[]
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([status])
+  @@index([subjectId])
+  @@index([studentId])
+  @@index([facultyId])
+}
+
+model DoubtMessage {
+  id          String            @id @default(uuid())
+  doubtId     String
+  doubt       Doubt             @relation(fields: [doubtId], references: [id], onDelete: Cascade)
+
+  senderId    String
+  sender      User              @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  content     String
+  isFaculty   Boolean           @default(false)
+
+  attachments DoubtAttachment[]
+
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([doubtId])
+}
+
+model DoubtAttachment {
+  id           String        @id @default(uuid())
+  fileName     String
+  fileUrl      String
+  fileType     String        // IMAGE, PDF, SCREENSHOT, etc.
+  fileSize     Int?
+
+  doubtId      String
+  doubt        Doubt         @relation(fields: [doubtId], references: [id], onDelete: Cascade)
+
+  messageId    String?
+  message      DoubtMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  uploadedById String
+  uploadedBy   User          @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime      @default(now())
+
+  @@index([doubtId])
+  @@index([messageId])
+}
+
+

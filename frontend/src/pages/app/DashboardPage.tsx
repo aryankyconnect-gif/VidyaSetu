@@ -17,6 +17,11 @@ import {
   TrendingUp,
   HelpCircle,
   Megaphone,
+  MessageSquare,
+  FolderArchive,
+  CheckSquare,
+  BarChart2,
+  RefreshCw,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -24,16 +29,19 @@ export const DashboardPage: React.FC = () => {
   const { user } = useAuth();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchStats = async () => {
     try {
       setLoading(true);
+      setError(null);
       const res = await DashboardService.getStats();
       if (res.data.success) {
         setData(res.data.data);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load dashboard statistics', err);
+      setError(err.response?.data?.message || 'Failed to load dashboard statistics. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -50,6 +58,23 @@ export const DashboardPage: React.FC = () => {
           <div className="h-8 w-8 animate-spin rounded-full border-3 border-brand-600 border-t-transparent" />
           <p className="text-xs text-slate-500 font-medium">Gathering real-time campus data...</p>
         </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-2xl border border-rose-200 bg-rose-50/60 p-8 text-center">
+        <AlertCircle className="mx-auto h-10 w-10 text-rose-500" />
+        <h3 className="mt-3 text-sm font-bold text-rose-900">Failed to load campus statistics</h3>
+        <p className="mt-1 text-xs text-rose-600 max-w-md mx-auto">{error}</p>
+        <button
+          onClick={fetchStats}
+          className="mt-4 inline-flex items-center space-x-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-rose-700 transition"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          <span>Retry Connection</span>
+        </button>
       </div>
     );
   }
@@ -74,6 +99,15 @@ export const DashboardPage: React.FC = () => {
           </div>
 
           <div className="mt-4 sm:mt-0 flex items-center space-x-3">
+            {user?.role === 'ADMIN' && (
+              <Link
+                to="/app/analytics"
+                className="inline-flex items-center rounded-xl bg-brand-500/30 border border-white/20 px-3.5 py-2 text-xs font-bold text-white backdrop-blur-md hover:bg-brand-500/40 transition"
+              >
+                <BarChart2 className="mr-1.5 h-3.5 w-3.5" />
+                Academic Analytics
+              </Link>
+            )}
             <Link
               to="/app/announcements"
               className="inline-flex items-center rounded-xl bg-white/10 px-3.5 py-2 text-xs font-semibold text-white backdrop-blur-md hover:bg-white/20 transition"
@@ -95,6 +129,56 @@ export const DashboardPage: React.FC = () => {
 };
 
 // ==========================================
+// REUSABLE STAT CARD COMPONENT
+// ==========================================
+interface StatCardProps {
+  label: string;
+  value: number;
+  icon: React.ElementType;
+  iconColor: string;
+  bgColor: string;
+  to?: string;
+  sublabel?: string;
+}
+
+const StatCard: React.FC<StatCardProps> = ({
+  label,
+  value,
+  icon: Icon,
+  iconColor,
+  bgColor,
+  to,
+  sublabel,
+}) => {
+  const cardContent = (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs hover:border-slate-300 transition group h-full flex flex-col justify-between">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-slate-500 truncate mr-2">{label}</span>
+        <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${bgColor}`}>
+          <Icon className={`h-4 w-4 ${iconColor}`} />
+        </div>
+      </div>
+      <div className="mt-3">
+        <p className="text-2xl font-extrabold text-slate-900 tracking-tight">
+          {typeof value === 'number' ? value.toLocaleString() : '0'}
+        </p>
+        {sublabel && (
+          <p className="mt-0.5 text-[11px] text-slate-400 font-medium truncate">{sublabel}</p>
+        )}
+      </div>
+    </div>
+  );
+
+  return to ? (
+    <Link to={to} className="block transition transform hover:-translate-y-0.5">
+      {cardContent}
+    </Link>
+  ) : (
+    cardContent
+  );
+};
+
+// ==========================================
 // ADMIN DASHBOARD VIEW
 // ==========================================
 const AdminDashboardView: React.FC<{ data: any }> = ({ data }) => {
@@ -104,54 +188,107 @@ const AdminDashboardView: React.FC<{ data: any }> = ({ data }) => {
 
   return (
     <div className="space-y-6">
-      {/* Metric Cards */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-          <div className="flex items-center text-slate-500 text-xs font-semibold">
-            <Users className="h-4 w-4 mr-1 text-purple-600" />
-            Total Users
-          </div>
-          <p className="mt-2 text-2xl font-extrabold text-slate-900">{metrics.totalUsers || 0}</p>
+      {/* 9 Core Database Statistics */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+            Campus Live Overview
+          </h2>
+          <span className="text-[11px] font-semibold text-slate-400">
+            Database-backed Real Metrics
+          </span>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-          <div className="flex items-center text-slate-500 text-xs font-semibold">
-            <GraduationCap className="h-4 w-4 mr-1 text-emerald-600" />
-            Students
-          </div>
-          <p className="mt-2 text-2xl font-extrabold text-slate-900">{metrics.totalStudents || 0}</p>
-        </div>
+        <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-3">
+          <StatCard
+            label="Total Students"
+            value={metrics.totalStudents ?? 0}
+            icon={GraduationCap}
+            iconColor="text-emerald-600"
+            bgColor="bg-emerald-50"
+            to="/app/users"
+            sublabel="Registered students in database"
+          />
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-          <div className="flex items-center text-slate-500 text-xs font-semibold">
-            <BookOpen className="h-4 w-4 mr-1 text-brand-600" />
-            Faculty
-          </div>
-          <p className="mt-2 text-2xl font-extrabold text-slate-900">{metrics.totalFaculty || 0}</p>
-        </div>
+          <StatCard
+            label="Total Faculty"
+            value={metrics.totalFaculty ?? 0}
+            icon={BookOpen}
+            iconColor="text-brand-600"
+            bgColor="bg-brand-50"
+            to="/app/users"
+            sublabel="Faculty & department instructors"
+          />
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-          <div className="flex items-center text-slate-500 text-xs font-semibold">
-            <Building className="h-4 w-4 mr-1 text-amber-600" />
-            Departments
-          </div>
-          <p className="mt-2 text-2xl font-extrabold text-slate-900">{metrics.totalDepartments || 0}</p>
-        </div>
+          <StatCard
+            label="Total CRs"
+            value={metrics.totalCRs ?? 0}
+            icon={ShieldCheck}
+            iconColor="text-amber-600"
+            bgColor="bg-amber-50"
+            to="/app/users"
+            sublabel="Active Class Representatives"
+          />
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-          <div className="flex items-center text-slate-500 text-xs font-semibold">
-            <FileText className="h-4 w-4 mr-1 text-indigo-600" />
-            Subjects
-          </div>
-          <p className="mt-2 text-2xl font-extrabold text-slate-900">{metrics.totalSubjects || 0}</p>
-        </div>
+          <StatCard
+            label="Total Departments"
+            value={metrics.totalDepartments ?? 0}
+            icon={Building}
+            iconColor="text-purple-600"
+            bgColor="bg-purple-50"
+            to="/app/academic"
+            sublabel="Academic faculties & departments"
+          />
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-          <div className="flex items-center text-slate-500 text-xs font-semibold">
-            <TrendingUp className="h-4 w-4 mr-1 text-teal-600" />
-            Enrollments
-          </div>
-          <p className="mt-2 text-2xl font-extrabold text-slate-900">{metrics.totalEnrollments || 0}</p>
+          <StatCard
+            label="Total Subjects"
+            value={metrics.totalSubjects ?? 0}
+            icon={FileText}
+            iconColor="text-indigo-600"
+            bgColor="bg-indigo-50"
+            to="/app/academic"
+            sublabel="Curriculum subjects & courses"
+          />
+
+          <StatCard
+            label="Total Resources"
+            value={metrics.totalResources ?? 0}
+            icon={FolderArchive}
+            iconColor="text-sky-600"
+            bgColor="bg-sky-50"
+            to="/app/resources"
+            sublabel="Uploaded course notes & materials"
+          />
+
+          <StatCard
+            label="Total Assignments"
+            value={metrics.totalAssignments ?? 0}
+            icon={CheckSquare}
+            iconColor="text-rose-600"
+            bgColor="bg-rose-50"
+            to="/app/assignments"
+            sublabel="Coursework assignments posted"
+          />
+
+          <StatCard
+            label="Total Submissions"
+            value={metrics.totalSubmissions ?? 0}
+            icon={TrendingUp}
+            iconColor="text-teal-600"
+            bgColor="bg-teal-50"
+            to="/app/analytics"
+            sublabel="Student submitted works"
+          />
+
+          <StatCard
+            label="Total Quizzes"
+            value={metrics.totalQuizzes ?? 0}
+            icon={HelpCircle}
+            iconColor="text-violet-600"
+            bgColor="bg-violet-50"
+            to="/app/quizzes"
+            sublabel="Published & active quiz assessments"
+          />
         </div>
       </div>
 
@@ -247,6 +384,27 @@ const FacultyDashboardView: React.FC<{ data: any }> = ({ data }) => {
           <p className="text-xs font-semibold text-slate-500">Submissions to Grade</p>
           <p className="mt-2 text-2xl font-extrabold text-amber-600">{metrics.pendingGradingCount || 0}</p>
         </div>
+      </div>
+
+      {/* Doubt Hub Banner Card */}
+      <div className="rounded-2xl border border-indigo-100 bg-gradient-to-r from-blue-50/80 via-indigo-50/60 to-purple-50/80 p-5 shadow-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex items-center space-x-3.5">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm shadow-indigo-500/20">
+            <MessageSquare className="h-5 w-5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">Faculty Help Desk &bull; Doubt Hub</h3>
+            <p className="text-xs text-slate-600 mt-0.5">
+              Review and answer academic doubts asked by students across your assigned subjects.
+            </p>
+          </div>
+        </div>
+        <Link
+          to="/app/doubts"
+          className="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-700 transition shrink-0"
+        >
+          Open Doubt Hub &rarr;
+        </Link>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

@@ -32,9 +32,12 @@ export const LoginPage: React.FC = () => {
         setErrorMessage(res.data.message || 'Login failed');
       }
     } catch (err: any) {
-      setErrorMessage(
-        err.response?.data?.message || 'Unable to connect to VidyaSetu API. Please check server.'
-      );
+      const msg = err.response?.data?.message;
+      if (msg && !/prisma|invoke|localhost:\d+|findUnique|server at/i.test(msg)) {
+        setErrorMessage(msg);
+      } else {
+        setErrorMessage('Unable to connect to VidyaSetu API. Please try again later.');
+      }
     } finally {
       setIsLoading(false);
     }

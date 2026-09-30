@@ -4,14 +4,30 @@ import { body } from 'express-validator';
 import {
   getDepartments,
   createDepartment,
+  updateDepartment,
+  deleteDepartment,
   getSemesters,
   createSemester,
+  updateSemester,
+  deleteSemester,
   getSections,
   createSection,
+  updateSection,
+  deleteSection,
   getSubjects,
   getSubjectById,
   createSubject,
+  updateSubject,
+  deleteSubject,
+  assignFacultyToSubject,
+  getModules,
   createModule,
+  updateModule,
+  deleteModule,
+  getEnrollments,
+  createEnrollment,
+  updateEnrollment,
+  deleteEnrollment,
 } from '../controllers/academic.controller';
 import { authenticate } from '../middleware/auth';
 import { authorizeRoles } from '../middleware/role';
@@ -22,7 +38,7 @@ const router = Router();
 
 router.use(authenticate);
 
-// Departments
+// --- Departments ---
 router.get('/departments', getDepartments);
 router.post(
   '/departments',
@@ -34,8 +50,10 @@ router.post(
   validateRequest,
   createDepartment
 );
+router.patch('/departments/:id', authorizeRoles(Role.ADMIN), updateDepartment);
+router.delete('/departments/:id', authorizeRoles(Role.ADMIN), deleteDepartment);
 
-// Semesters
+// --- Semesters ---
 router.get('/semesters', getSemesters);
 router.post(
   '/semesters',
@@ -47,8 +65,10 @@ router.post(
   validateRequest,
   createSemester
 );
+router.patch('/semesters/:id', authorizeRoles(Role.ADMIN), updateSemester);
+router.delete('/semesters/:id', authorizeRoles(Role.ADMIN), deleteSemester);
 
-// Sections
+// --- Sections ---
 router.get('/sections', getSections);
 router.post(
   '/sections',
@@ -61,8 +81,10 @@ router.post(
   validateRequest,
   createSection
 );
+router.patch('/sections/:id', authorizeRoles(Role.ADMIN), updateSection);
+router.delete('/sections/:id', authorizeRoles(Role.ADMIN), deleteSection);
 
-// Subjects
+// --- Subjects ---
 router.get('/subjects', getSubjects);
 router.get('/subjects/:id', getSubjectById);
 router.post(
@@ -77,8 +99,12 @@ router.post(
   validateRequest,
   createSubject
 );
+router.patch('/subjects/:id', authorizeRoles(Role.ADMIN), updateSubject);
+router.delete('/subjects/:id', authorizeRoles(Role.ADMIN), deleteSubject);
+router.patch('/subjects/:id/assign-faculty', authorizeRoles(Role.ADMIN), assignFacultyToSubject);
 
-// Modules
+// --- Modules ---
+router.get('/modules', getModules);
 router.post(
   '/modules',
   authorizeRoles(Role.ADMIN, Role.FACULTY),
@@ -89,5 +115,22 @@ router.post(
   validateRequest,
   createModule
 );
+router.patch('/modules/:id', authorizeRoles(Role.ADMIN, Role.FACULTY), updateModule);
+router.delete('/modules/:id', authorizeRoles(Role.ADMIN, Role.FACULTY), deleteModule);
+
+// --- Enrollments (Admin / Faculty / CR) ---
+router.get('/enrollments', authorizeRoles(Role.ADMIN, Role.FACULTY, Role.CR), getEnrollments);
+router.post(
+  '/enrollments',
+  authorizeRoles(Role.ADMIN),
+  [
+    body('studentId').notEmpty().withMessage('Student ID is required'),
+    body('subjectId').notEmpty().withMessage('Subject ID is required'),
+  ],
+  validateRequest,
+  createEnrollment
+);
+router.patch('/enrollments/:id', authorizeRoles(Role.ADMIN), updateEnrollment);
+router.delete('/enrollments/:id', authorizeRoles(Role.ADMIN), deleteEnrollment);
 
 export default router;

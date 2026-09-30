@@ -27,9 +27,16 @@ export const Header: React.FC<HeaderProps> = ({ onToggleSidebar }) => {
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [showNotifications, setShowNotifications] = useState<boolean>(false);
   const [showUserMenu, setShowUserMenu] = useState<boolean>(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const notifRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    navigate(`/app/resources?search=${encodeURIComponent(searchQuery.trim())}`);
+  };
 
   const fetchNotifications = async () => {
     try {
@@ -109,14 +116,16 @@ export const Header: React.FC<HeaderProps> = ({ onToggleSidebar }) => {
         </Link>
 
         {/* Global quick search bar */}
-        <div className="hidden md:flex items-center relative w-72">
+        <form onSubmit={handleSearchSubmit} className="hidden md:flex items-center relative w-72">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
           <input
             type="text"
-            placeholder="Search subjects, assignments..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search resources, PYQs, subjects..."
             className="w-full rounded-lg border border-slate-200 bg-slate-50/75 py-1.5 pl-9 pr-4 text-sm text-slate-800 placeholder-slate-400 transition-colors focus:border-brand-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500"
           />
-        </div>
+        </form>
       </div>
 
       {/* Right side: Notifications + User Profile */}
