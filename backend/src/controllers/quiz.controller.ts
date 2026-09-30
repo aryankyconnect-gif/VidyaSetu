@@ -175,7 +175,16 @@ export const createQuiz = async (req: Request, res: Response, next: NextFunction
       ipAddress: req.ip,
     });
 
-    res.status(201).json({ success: true, data: quiz });
+    const fullQuiz = await prisma.quiz.findUnique({
+      where: { id: quiz.id },
+      include: {
+        questions: {
+          orderBy: { orderIndex: 'asc' },
+        },
+      },
+    });
+
+    res.status(201).json({ success: true, data: fullQuiz });
   } catch (error) {
     next(error);
   }
@@ -217,8 +226,29 @@ export const submitQuizAttempt = async (req: Request, res: Response, next: NextF
     let calculatedScore = 0;
     quiz.questions.forEach((q) => {
       const studentAns = answers ? answers[q.id] : undefined;
-      if (studentAns !== undefined && String(studentAns).trim() === String(q.correctAnswer).trim()) {
-        calculatedScore += q.marks;
+      if (studentAns !== undefined && studentAns !== null) {
+        let parsedOptions: string[] = [];
+        try {
+          parsedOptions = JSON.parse(q.optionsJson);
+        } catch {
+          parsedOptions = [];
+        }
+
+        const trimmedAns = String(studentAns).trim();
+        const trimmedCorrect = String(q.correctAnswer).trim();
+
+        // 1. Direct text match
+        if (trimmedAns.toLowerCase() === trimmedCorrect.toLowerCase()) {
+          calculatedScore += q.marks;
+        } else {
+          // 2. Index match (e.g. '0', '1', '2', '3')
+          const numericIndex = Number(trimmedAns);
+          if (!isNaN(numericIndex) && parsedOptions[numericIndex]) {
+            if (String(parsedOptions[numericIndex]).trim().toLowerCase() === trimmedCorrect.toLowerCase()) {
+              calculatedScore += q.marks;
+            }
+          }
+        }
       }
     });
 

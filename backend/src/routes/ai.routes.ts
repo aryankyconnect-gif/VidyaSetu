@@ -4,6 +4,7 @@ import { aiService } from '../services/ai.service';
 import { authenticate } from '../middleware/auth';
 import { authorizeRoles } from '../middleware/role';
 import { Role } from '@prisma/client';
+import { logger } from '../utils/logger';
 
 const router = Router();
 
@@ -24,21 +25,23 @@ router.get('/status', (req: Request, res: Response) => {
 });
 
 /**
- * Handler for generating MCQ quiz questions
+ * Handler for generating MCQ/TF quiz questions
  */
 const handleQuizGenerate = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { topic, numberOfQuestions, difficulty, subjectId } = req.body;
+    const { topic, numberOfQuestions, difficulty, subjectId, moduleId, questionType } = req.body;
     if (!topic || typeof topic !== 'string' || topic.trim() === '') {
       res.status(400).json({ success: false, message: 'Topic is required to generate quiz questions' });
       return;
     }
 
     const result = await aiService.generateQuizQuestions({
-      topic,
+      topic: topic.trim(),
       subjectId,
+      moduleId,
       numberOfQuestions: Number(numberOfQuestions) || 5,
       difficulty,
+      questionType,
     });
     res.status(200).json({ success: true, data: result });
   } catch (error) {
@@ -59,12 +62,43 @@ router.post('/quiz/generate', authorizeRoles(Role.ADMIN, Role.FACULTY), handleQu
 router.post('/generate-quiz', authorizeRoles(Role.ADMIN, Role.FACULTY), handleQuizGenerate);
 
 /**
+ * POST /api/ai/quiz/regenerate-question
+ * Regenerates an individual question with Gemini
+ */
+router.post(
+  '/quiz/regenerate-question',
+  authorizeRoles(Role.ADMIN, Role.FACULTY),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { topic, difficulty, subjectId, moduleId, questionType, avoidQuestionText } = req.body;
+      if (!topic || typeof topic !== 'string' || topic.trim() === '') {
+        res.status(400).json({ success: false, message: 'Topic is required to regenerate a question' });
+        return;
+      }
+
+      const question = await aiService.regenerateSingleQuestion({
+        topic: topic.trim(),
+        difficulty,
+        subjectId,
+        moduleId,
+        questionType,
+        avoidQuestionText,
+      });
+
+      res.status(200).json({ success: true, data: question });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * POST /api/ai/ask
  * AI Study Assistant: students and faculty can ask questions about course material
  */
 router.post('/ask', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { question, context, subjectId } = req.body;
+    const { question, context, subjectId, subjectName, conversationHistory } = req.body;
     if (!question || typeof question !== 'string' || question.trim() === '') {
       res.status(400).json({ success: false, message: 'Question text is required' });
       return;
@@ -74,10 +108,23 @@ router.post('/ask', async (req: Request, res: Response, next: NextFunction) => {
       question: question.trim(),
       context,
       subjectId,
+      subjectName,
+      conversationHistory,
     });
-    res.status(200).json({ success: true, data: result });
-  } catch (error) {
-    next(error);
+
+    res.status(200).json({
+      success: true,
+      answer: result.answer,
+      subject: result.subject,
+      model: result.model,
+      data: result,
+    });
+  } catch (error: any) {
+    logger.error(`AI Ask Route Error: ${error.message}`);
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'An error occurred while processing your academic query.',
+    });
   }
 });
 

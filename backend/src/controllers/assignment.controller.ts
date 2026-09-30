@@ -4,6 +4,8 @@ import prisma from '../utils/prisma';
 import { HttpError } from '../middleware/errorHandler';
 import { logAudit } from '../services/audit.service';
 import { SubmissionStatus } from '@prisma/client';
+import { SimilarityService } from '../services/similarity.service';
+import { logger } from '../utils/logger';
 
 export const getAssignments = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -210,58 +212,11 @@ export const submitAssignment = async (req: Request, res: Response, next: NextFu
 
     const isLate = new Date() > new Date(assignment.dueDate);
 
-    // Similarity Detection Algorithm
-    // Computes token-level Jaccard similarity against all existing peer submissions
-    let calculatedSimilarity = 12.0; // Baseline originality for solo/first submission
-    let similarityReport = 'Low similarity - High original content';
+    // Extract text from content and/or PDF submission
+    const extraction = await SimilarityService.extractSubmissionText(content, fileUrl);
 
-    if (content && typeof content === 'string') {
-      const cleanTokens = (text: string): Set<string> => {
-        const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2);
-        return new Set(words);
-      };
-
-      const currentTokens = cleanTokens(content);
-      const peerSubmissions = await prisma.assignmentSubmission.findMany({
-        where: {
-          assignmentId: id,
-          NOT: { studentId: req.user.studentProfileId },
-        },
-        select: { content: true, student: { select: { user: { select: { name: true } } } } },
-      });
-
-      let highestOverlap = 0;
-      let matchingStudent = '';
-
-      for (const peer of peerSubmissions) {
-        if (!peer.content) continue;
-        const peerTokens = cleanTokens(peer.content);
-        if (peerTokens.size === 0 || currentTokens.size === 0) continue;
-
-        let intersection = 0;
-        for (const token of currentTokens) {
-          if (peerTokens.has(token)) intersection++;
-        }
-        const union = new Set([...currentTokens, ...peerTokens]).size;
-        const overlapPercent = Math.round((intersection / union) * 100);
-
-        if (overlapPercent > highestOverlap) {
-          highestOverlap = overlapPercent;
-          matchingStudent = peer.student?.user?.name || 'peer';
-        }
-      }
-
-      if (peerSubmissions.length > 0) {
-        calculatedSimilarity = Math.min(Math.max(highestOverlap, 8), 98);
-        if (calculatedSimilarity > 50) {
-          similarityReport = `High similarity (${calculatedSimilarity}%) detected with submission by ${matchingStudent}`;
-        } else if (calculatedSimilarity > 25) {
-          similarityReport = `Moderate similarity (${calculatedSimilarity}%) - Shared references detected`;
-        } else {
-          similarityReport = `Low similarity (${calculatedSimilarity}%) - Authentic, original work`;
-        }
-      }
-    }
+    let calculatedSimilarity = 0;
+    let similarityReport = extraction.warning || 'Original work - No peer matches';
 
     const submission = await prisma.assignmentSubmission.upsert({
       where: {
@@ -273,6 +228,8 @@ export const submitAssignment = async (req: Request, res: Response, next: NextFu
       update: {
         fileUrl,
         content,
+        extractedText: extraction.text,
+        extractionStatus: extraction.status,
         similarityScore: calculatedSimilarity,
         similarityReport,
         status: isLate ? SubmissionStatus.LATE : SubmissionStatus.SUBMITTED,
@@ -283,6 +240,8 @@ export const submitAssignment = async (req: Request, res: Response, next: NextFu
         studentId: req.user.studentProfileId,
         fileUrl,
         content,
+        extractedText: extraction.text,
+        extractionStatus: extraction.status,
         similarityScore: calculatedSimilarity,
         similarityReport,
         status: isLate ? SubmissionStatus.LATE : SubmissionStatus.SUBMITTED,
@@ -290,6 +249,19 @@ export const submitAssignment = async (req: Request, res: Response, next: NextFu
       include: {
         grade: true,
       },
+    });
+
+    // Run similarity comparisons against peer submissions within this assignment
+    try {
+      await SimilarityService.runAssignmentSimilarity(id);
+    } catch (simErr: any) {
+      logger.error(`Error running similarity detection for assignment ${id}: ${simErr.message}`);
+    }
+
+    // Refetch updated submission with current similarity score
+    const updatedSubmission = await prisma.assignmentSubmission.findUnique({
+      where: { id: submission.id },
+      include: { grade: true },
     });
 
     // Notify assignment creator (Faculty)
@@ -302,7 +274,127 @@ export const submitAssignment = async (req: Request, res: Response, next: NextFu
       },
     });
 
-    res.status(200).json({ success: true, data: submission });
+    res.status(200).json({ success: true, data: updatedSubmission || submission });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getAssignmentSimilarity = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const { filter, search } = req.query;
+
+    if (!req.user) throw new HttpError(401, 'Unauthorized');
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id },
+      include: {
+        subject: true,
+        submissions: {
+          include: {
+            student: {
+              include: {
+                user: { select: { id: true, name: true, email: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!assignment) {
+      throw new HttpError(404, 'Assignment not found');
+    }
+
+    // Authorization: Faculty can view if they created it or teach the subject, Admin can view any
+    if (
+      req.user.role === 'FACULTY' &&
+      assignment.createdById !== req.user.userId &&
+      assignment.subject.facultyId !== req.user.facultyProfileId
+    ) {
+      throw new HttpError(403, 'You are not authorized to view similarity reports for this assignment');
+    }
+
+    let records = await SimilarityService.runAssignmentSimilarity(id);
+
+    // Apply risk filter ('HIGH' | 'MEDIUM' | 'LOW')
+    if (filter && typeof filter === 'string' && filter.toUpperCase() !== 'ALL') {
+      const riskUpper = filter.toUpperCase();
+      records = records.filter((r) => r.riskLevel === riskUpper);
+    }
+
+    // Apply search filter (Student name or Roll Number)
+    if (search && typeof search === 'string' && search.trim().length > 0) {
+      const q = search.trim().toLowerCase();
+      records = records.filter((r) => {
+        const nameA = r.submissionA?.student?.user?.name?.toLowerCase() || '';
+        const rollA = r.submissionA?.student?.rollNumber?.toLowerCase() || '';
+        const nameB = r.submissionB?.student?.user?.name?.toLowerCase() || '';
+        const rollB = r.submissionB?.student?.rollNumber?.toLowerCase() || '';
+        return nameA.includes(q) || rollA.includes(q) || nameB.includes(q) || rollB.includes(q);
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        assignment: {
+          id: assignment.id,
+          title: assignment.title,
+          totalMarks: assignment.totalMarks,
+          subjectCode: assignment.subject.code,
+          totalSubmissions: assignment.submissions.length,
+        },
+        pairs: records,
+        totalPairs: records.length,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const recalculateAssignmentSimilarity = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    if (!req.user) throw new HttpError(401, 'Unauthorized');
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id },
+      include: { subject: true },
+    });
+
+    if (!assignment) {
+      throw new HttpError(404, 'Assignment not found');
+    }
+
+    if (
+      req.user.role === 'FACULTY' &&
+      assignment.createdById !== req.user.userId &&
+      assignment.subject.facultyId !== req.user.facultyProfileId
+    ) {
+      throw new HttpError(403, 'You are not authorized to recalculate similarity for this assignment');
+    }
+
+    // Clear cached pairwise similarities to force fresh recalculation
+    await prisma.submissionSimilarity.deleteMany({
+      where: { assignmentId: id },
+    });
+
+    // Reset cached extractedText on submissions so they re-extract if updated
+    await prisma.assignmentSubmission.updateMany({
+      where: { assignmentId: id },
+      data: { extractedText: null },
+    });
+
+    const records = await SimilarityService.runAssignmentSimilarity(id);
+
+    res.status(200).json({
+      success: true,
+      message: 'Similarity analysis recalculated successfully',
+      data: records,
+    });
   } catch (error) {
     next(error);
   }
@@ -375,3 +467,37 @@ export const gradeSubmission = async (req: Request, res: Response, next: NextFun
     next(error);
   }
 };
+
+export const deleteAssignment = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id },
+    });
+
+    if (!assignment) {
+      throw new HttpError(404, 'Assignment not found');
+    }
+
+    if (req.user?.role === 'FACULTY' && assignment.createdById !== req.user.userId) {
+      throw new HttpError(403, 'You can only delete assignments you created');
+    }
+
+    await prisma.assignment.delete({ where: { id } });
+
+    await logAudit({
+      action: 'DELETE_ASSIGNMENT',
+      entity: 'ASSIGNMENT',
+      entityId: id,
+      userId: req.user?.userId,
+      details: `Deleted assignment "${assignment.title}"`,
+      ipAddress: req.ip,
+    });
+
+    res.status(200).json({ success: true, message: 'Assignment deleted successfully' });
+  } catch (error) {
+    next(error);
+  }
+};
+

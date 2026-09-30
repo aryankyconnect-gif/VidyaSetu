@@ -9,6 +9,7 @@ export interface GeneratedQuizQuestion {
   explanation: string;
   difficulty: 'EASY' | 'MEDIUM' | 'HARD';
   topic: string;
+  questionType?: 'MULTIPLE_CHOICE' | 'TRUE_FALSE' | 'MCQ';
 }
 
 export interface SummarizeResult {
@@ -18,9 +19,20 @@ export interface SummarizeResult {
   possibleExamQuestions: string[];
 }
 
+export interface ChatHistoryMessage {
+  role: 'user' | 'model' | 'assistant';
+  text: string;
+}
+
 export class GeminiService {
   private genAI: GoogleGenerativeAI | null = null;
-  private readonly defaultModel = 'gemini-1.5-flash';
+  // Prioritized models supported by current API endpoint with automatic fallback
+  private readonly candidateModels = [
+    'gemini-3.5-flash-lite',
+    'gemini-3.5-flash',
+    'gemini-3.7-flash',
+    'gemini-flash-lite-latest',
+  ];
 
   constructor() {
     this.initClient();
@@ -59,29 +71,56 @@ export class GeminiService {
   }
 
   /**
-   * Safe execution wrapper handling timeouts, rate limits, network errors, and auth errors
+   * Safe execution wrapper handling timeouts
    */
   private async executeWithTimeout<T>(fn: () => Promise<T>, timeoutMs = 25000): Promise<T> {
     return Promise.race([
       fn(),
       new Promise<T>((_, reject) =>
-        setTimeout(() => reject(new Error('Gemini API request timed out after 25 seconds')), timeoutMs)
+        setTimeout(() => reject(new Error('AI request timed out after 25 seconds')), timeoutMs)
       ),
     ]);
   }
 
   /**
-   * Sanitizes and maps Gemini errors to user-friendly messages without exposing internal tokens
+   * Attempts execution across candidate models if a temporary 503 or overload occurs
+   */
+  private async executeWithModelFallback<T>(
+    operation: (modelName: string) => Promise<T>
+  ): Promise<{ result: T; model: string }> {
+    this.checkConfigured();
+
+    let lastError: any = null;
+    for (const modelName of this.candidateModels) {
+      try {
+        const result = await this.executeWithTimeout(() => operation(modelName));
+        return { result, model: modelName };
+      } catch (err: any) {
+        lastError = err;
+        const errMsg = String(err?.message || err);
+        logger.warn(`Gemini attempt with model ${modelName} failed: ${errMsg.slice(0, 100)}. Trying fallback model...`);
+        // If authentication failed or API key is invalid, fail immediately without looping
+        if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('API key not valid') || errMsg.includes('401') || errMsg.includes('403')) {
+          break;
+        }
+      }
+    }
+
+    return this.handleGeminiError(lastError);
+  }
+
+  /**
+   * Sanitizes and maps Gemini errors to user-friendly messages without exposing internal tokens or keys
    */
   private handleGeminiError(error: any): never {
     const errMsg = String(error?.message || error || '');
-    logger.error(`Gemini Service Error: ${errMsg.slice(0, 120)}`);
+    logger.error(`Gemini Service Error: ${errMsg.slice(0, 150)}`);
 
     if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('API key not valid') || errMsg.includes('401') || errMsg.includes('403')) {
       throw new Error('Gemini API authentication failed. Please verify the API key configuration on the server.');
     }
     if (errMsg.includes('429') || errMsg.includes('Quota exceeded') || errMsg.includes('RESOURCE_EXHAUSTED')) {
-      throw new Error('Gemini AI rate limit exceeded. Please wait a few moments before trying again.');
+      throw new Error('VidyaSetu AI is experiencing high demand right now. Please wait a few moments before trying again.');
     }
     if (errMsg.includes('timed out')) {
       throw new Error('The AI service timed out while processing your request. Please try again.');
@@ -94,7 +133,162 @@ export class GeminiService {
   }
 
   /**
-   * 1. AI Quiz Generator
+   * Constructs the academic study assistant system prompt
+   */
+  private buildSystemInstruction(subjectName?: string, context?: string): string {
+    return `You are VidyaSetu AI, an expert, inspiring, and crystal-clear college professor and teaching assistant.
+Your goal is to explain concepts clearly, concisely, and effectively—like the best teacher a student has ever had.
+
+Academic Context:
+- Focus Subject: ${subjectName || 'College Curriculum / Engineering'}
+${context ? `- Reference Syllabus / Lecture Material:\n${context}\n` : ''}
+
+CRITICAL TEACHING PRINCIPLES:
+1. Speak Like a Great College Teacher:
+   - Prefer simple English, short sentences, and intuitive explanations before introducing technical terms.
+   - Be direct. Answer the student's question IMMEDIATELY in the very first sentence.
+   - NEVER use filler intros ("Here is a comprehensive breakdown...", "Let's dive deep...", "In this response...").
+   - NEVER use filler conclusions ("In summary, both are important...", "In conclusion...").
+   - NEVER produce 10+ bloated textbook sections or repeat definitions.
+
+2. ADAPT TO QUESTION TYPE (Choose ONLY the structure appropriate to the question! Do NOT force every section into every answer):
+
+A. COMPARISON QUESTION (e.g. "Difference between BFS and DFS", "Process vs Thread", "TCP vs UDP"):
+   - ### Short Answer: 2–3 sentences giving the core difference directly.
+   - ### Key Difference: A concise Markdown comparison table (3–5 rows max).
+   - ### Simple Example: A relatable real-world or intuitive analogy (e.g., searching rooms floor-by-floor in a building).
+   - ### Exam Point: 2–4 high-yield points for university examinations.
+   - ### Quick Revision: 2 quick lines (e.g. BFS → Queue → Level-wise; DFS → Stack → Depth-wise).
+
+B. DEFINITION / CONCEPT QUESTION (e.g. "What is normalization in DBMS?", "What is deadlock in OS?"):
+   - ### Definition: Direct 1–2 sentence formal definition.
+   - ### Simple Explanation: Plain language explanation that a beginner can grasp immediately.
+   - ### Example: A concrete, practical scenario.
+   - ### Key Exam Points: 2–4 bullet points of high-yield facts (e.g., 4 Coffman conditions for deadlock, normal forms 1NF-3NF/BCNF).
+   - ### Quick Revision: 1–2 bullet summary.
+
+C. PROGRAMMING QUESTION (e.g. "Write a C++ program for binary search"):
+   - ### Approach: 2 lines explaining the logic.
+   - ### Algorithm: Concise step-by-step logic.
+   - ### Code: Clean, standard, commented code in fenced code blocks with language tag (e.g. \`\`\`cpp).
+   - ### Code Explanation: 2–3 short bullets explaining the critical operations.
+   - ### Complexity: Time & Space complexity in 1 line.
+   - ### Common Exam Mistake: 1 line (e.g. integer overflow when computing mid).
+
+D. ALGORITHM QUESTION (e.g. "Explain Dijkstra's algorithm"):
+   - ### What It Does: 2 sentences.
+   - ### How It Works: Step-by-step numbered walkthrough.
+   - ### Example: Simple trace on a small input.
+   - ### Complexity: Time & Space.
+   - ### Exam Point: Key properties (e.g. greedy choice, non-negative weights).
+
+E. MATHEMATICAL / NUMERICAL QUESTION:
+   - ### Given & Formula: Relevant formula.
+   - ### Step-by-Step Solution: Clear mathematical derivation/steps.
+   - ### Final Answer: Highlighted final result.
+   - ### Exam Tip: Tricky pitfalls or shortcuts.
+
+F. "WHY" QUESTION (e.g. "Why does BFS use a queue?", "Why normalize?"):
+   - ### Direct Answer: 1–2 sentences.
+   - ### Reason: 2–3 sentences explaining the core mechanics.
+   - ### Simple Example: Clear demonstration.
+   - ### Key Takeaway: 1 line.
+
+G. VERY SIMPLE OR DIRECT QUESTION:
+   - Answer directly and clearly in 3–6 sentences. Do NOT generate unnecessary subheadings or bloated sections.
+
+3. DIFFICULTY LEVEL & USER OVERRIDES:
+   - Default Level: College beginner/intermediate (approachable, clear, rigorous yet friendly).
+   - If the student asks "Explain like I'm a beginner" → use simpler analogies and zero unnecessary jargon.
+   - If the student asks "Explain in depth" → provide deeper technical rigor and proofs.
+   - If the student asks "Give exam answer" or "Give only the answer" → provide a concise, point-wise exam answer without extra chatter.
+
+4. EXAM-ORIENTED ACCURACY:
+   - Always state exact asymptotic time and space complexities where relevant.
+   - Highlight common exam traps and one-line exam definitions.
+   - Never invent college-specific policies, marks, or fake documents.`;
+  }
+
+  /**
+   * 1. AI Study Assistant (Q&A / Doubt Solver with conversation memory)
+   */
+  public async askStudyAssistant(params: {
+    question: string;
+    context?: string;
+    subjectName?: string;
+    conversationHistory?: ChatHistoryMessage[];
+  }): Promise<{ answer: string; model: string }> {
+    this.checkConfigured();
+
+    const { question, context, subjectName, conversationHistory } = params;
+    const systemInstruction = this.buildSystemInstruction(subjectName, context);
+
+    // Prepare multi-turn conversation history if provided
+    let historyForChat: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+
+    if (conversationHistory && Array.isArray(conversationHistory)) {
+      const formatted: Array<{ role: 'user' | 'model'; text: string }> = [];
+      for (const m of conversationHistory) {
+        if (!m || !m.text || m.text.trim() === '') continue;
+        const role: 'user' | 'model' = (m.role === 'assistant' || m.role === 'model') ? 'model' : 'user';
+        formatted.push({ role, text: m.text.trim() });
+      }
+
+      // History in Gemini must start with a 'user' turn
+      const firstUserIdx = formatted.findIndex(m => m.role === 'user');
+      if (firstUserIdx !== -1) {
+        const validSequence = formatted.slice(firstUserIdx);
+        // Retain the last 6 turns to keep context fast and focused
+        const recent = validSequence.slice(-6);
+        const startIdx = recent.findIndex(m => m.role === 'user');
+        if (startIdx !== -1) {
+          const sliceToUse = recent.slice(startIdx);
+          for (const item of sliceToUse) {
+            if (historyForChat.length > 0 && historyForChat[historyForChat.length - 1].role === item.role) {
+              historyForChat[historyForChat.length - 1].parts[0].text += `\n\n${item.text}`;
+            } else {
+              historyForChat.push({
+                role: item.role,
+                parts: [{ text: item.text }],
+              });
+            }
+          }
+        }
+      }
+    }
+
+    return this.executeWithModelFallback(async (modelName) => {
+      const model = this.genAI!.getGenerativeModel({
+        model: modelName,
+        systemInstruction,
+        generationConfig: {
+          temperature: 0.4,
+          maxOutputTokens: 1200,
+        },
+      });
+
+      let answerText = '';
+      if (historyForChat.length > 0) {
+        const chat = model.startChat({
+          history: historyForChat,
+        });
+        const res = await chat.sendMessage(question);
+        answerText = res.response.text();
+      } else {
+        const res = await model.generateContent(question);
+        answerText = res.response.text();
+      }
+
+      if (!answerText || answerText.trim() === '') {
+        throw new Error('AI returned an empty response');
+      }
+
+      return answerText.trim();
+    }).then(({ result, model }) => ({ answer: result, model }));
+  }
+
+  /**
+   * 2. AI Quiz Generator
    * Generates multiple-choice questions with strict schema validation
    */
   public async generateMCQQuestions(params: {
@@ -102,160 +296,157 @@ export class GeminiService {
     difficulty: 'EASY' | 'MEDIUM' | 'HARD';
     numberOfQuestions: number;
     subjectName?: string;
+    moduleTitle?: string;
+    questionType?: 'MCQ' | 'TRUE_FALSE';
   }): Promise<GeneratedQuizQuestion[]> {
     this.checkConfigured();
 
-    const { topic, difficulty, numberOfQuestions, subjectName } = params;
+    const { topic, difficulty, numberOfQuestions, subjectName, moduleTitle, questionType } = params;
     const count = Math.min(Math.max(numberOfQuestions, 1), 20);
+    const isTF = questionType === 'TRUE_FALSE';
 
-    const prompt = `You are a university professor creating an academic multiple-choice quiz.
+    const prompt = `You are a university professor creating an academic quiz for college students.
 Subject: ${subjectName || 'Computer Science / Engineering'}
-Topic: ${topic}
+${moduleTitle ? `Module: ${moduleTitle}\n` : ''}Topic: ${topic}
 Difficulty: ${difficulty}
 Number of Questions: ${count}
+Question Type: ${isTF ? 'True / False' : 'Multiple Choice (MCQ)'}
 
-REQUIREMENTS:
-1. Generate exactly ${count} multiple choice questions.
-2. Each question MUST have:
-   - "question": string (clear, academic question text)
-   - "options": array of exactly 4 distinct strings
-   - "correctAnswer": string (MUST be identical to one of the 4 strings in "options")
-   - "explanation": string (brief pedagogical explanation of why this answer is correct)
-   - "difficulty": "${difficulty}"
-   - "topic": "${topic}"
-3. Format output as a JSON array of objects. Do not wrap in markdown quotes if possible, output pure JSON.`;
+STRICT JSON OUTPUT REQUIREMENT:
+Return a JSON object with a "questions" array in this exact schema:
+{
+  "questions": [
+    {
+      "question": "Which data structure is commonly used for BFS traversal?",
+      "options": ["Stack", "Queue", "Heap", "Tree"],
+      "correctAnswer": "Queue",
+      "explanation": "BFS explores nodes level by level using a FIFO queue."
+    }
+  ]
+}
 
-    try {
+RULES:
+1. Generate exactly ${count} questions.
+2. For MCQ: Each question MUST have exactly 4 distinct options. "correctAnswer" MUST be an exact verbatim match to one of the 4 items in "options".
+3. For True/False: "options" MUST be exactly ["True", "False"], and "correctAnswer" MUST be either "True" or "False".
+4. "explanation": A concise, educational 1–2 sentence explanation of why the correct answer is right.
+5. Provide high quality, academically rigorous questions directly testing concepts, algorithms, edge cases, and principles.
+6. Output valid, parseable JSON only.`;
+
+    const { result: validated } = await this.executeWithModelFallback(async (modelName) => {
       const model = this.genAI!.getGenerativeModel({
-        model: this.defaultModel,
+        model: modelName,
         generationConfig: {
           responseMimeType: 'application/json',
-          temperature: 0.4,
+          temperature: 0.35,
         },
       });
 
-      const result = await this.executeWithTimeout(async () => {
-        const res = await model.generateContent(prompt);
-        return res.response.text();
-      });
+      const res = await model.generateContent(prompt);
+      const textResult = res.response.text();
 
-      if (!result || result.trim() === '') {
+      if (!textResult || textResult.trim() === '') {
         throw new Error('Empty response received from AI model');
       }
 
-      // Parse JSON safely
       let parsed: any;
       try {
-        parsed = JSON.parse(result);
+        parsed = JSON.parse(textResult);
       } catch (parseErr) {
-        // Fallback: extract JSON array substring
-        const match = result.match(/\[[\s\S]*\]/);
-        if (match) {
-          parsed = JSON.parse(match[0]);
-        } else {
+        const objMatch = textResult.match(/\{[\s\S]*\}/);
+        const arrMatch = textResult.match(/\[[\s\S]*\]/);
+        if (objMatch) {
+          try { parsed = JSON.parse(objMatch[0]); } catch {}
+        }
+        if (!parsed && arrMatch) {
+          try { parsed = JSON.parse(arrMatch[0]); } catch {}
+        }
+        if (!parsed) {
           throw new Error('Malformed JSON received from AI response');
         }
       }
 
-      if (!Array.isArray(parsed)) {
-        if (parsed.questions && Array.isArray(parsed.questions)) {
-          parsed = parsed.questions;
-        } else {
-          throw new Error('AI response structure invalid: expected array of questions');
-        }
+      let items: any[] = [];
+      if (Array.isArray(parsed)) {
+        items = parsed;
+      } else if (parsed && Array.isArray(parsed.questions)) {
+        items = parsed.questions;
+      } else {
+        throw new Error('AI response structure invalid: expected array of questions');
       }
 
-      // Validate each question against strict schema
-      const validated: GeneratedQuizQuestion[] = [];
-      for (const item of parsed) {
+      const questionsList: GeneratedQuizQuestion[] = [];
+      for (const item of items) {
         if (!item || typeof item !== 'object') continue;
         const qText = String(item.question || '').trim();
-        const options = Array.isArray(item.options) ? item.options.map((o: any) => String(o).trim()) : [];
-        const rawAnswer = String(item.correctAnswer || '').trim();
+        let rawOptions = Array.isArray(item.options) ? item.options.map((o: any) => String(o).trim()) : [];
+        let rawAnswer = String(item.correctAnswer || '').trim();
         const explanation = String(item.explanation || 'Refer to course reference materials.').trim();
 
-        if (!qText || options.length !== 4) continue;
+        if (!qText) continue;
 
-        // Ensure correctAnswer matches one of the options (support index format "0".."3" or text format)
-        let resolvedAnswer = rawAnswer;
-        if (/^[0-3]$/.test(rawAnswer)) {
-          const idx = parseInt(rawAnswer, 10);
-          resolvedAnswer = options[idx] || options[0];
-        } else if (!options.includes(resolvedAnswer)) {
-          // Find closest matching option or fallback to first option
-          const found = options.find((o: string) => o.toLowerCase() === resolvedAnswer.toLowerCase());
-          resolvedAnswer = found || options[0];
+        if (isTF) {
+          rawOptions = ['True', 'False'];
+          if (rawAnswer.toLowerCase().startsWith('t')) rawAnswer = 'True';
+          else if (rawAnswer.toLowerCase().startsWith('f')) rawAnswer = 'False';
+          else rawAnswer = 'True';
+        } else {
+          if (rawOptions.length < 4) continue;
+          rawOptions = rawOptions.slice(0, 4);
+
+          if (/^[0-3]$/.test(rawAnswer)) {
+            const idx = parseInt(rawAnswer, 10);
+            rawAnswer = rawOptions[idx] || rawOptions[0];
+          } else if (!rawOptions.includes(rawAnswer)) {
+            const found = rawOptions.find((o: string) => o.toLowerCase() === rawAnswer.toLowerCase());
+            rawAnswer = found || rawOptions[0];
+          }
         }
 
-        validated.push({
+        questionsList.push({
           question: qText,
-          options,
-          correctAnswer: resolvedAnswer,
+          options: rawOptions,
+          correctAnswer: rawAnswer,
           explanation,
           difficulty: difficulty || 'MEDIUM',
           topic: topic || 'General',
+          questionType: isTF ? 'TRUE_FALSE' : 'MULTIPLE_CHOICE',
         });
       }
 
-      if (validated.length === 0) {
+      if (questionsList.length === 0) {
         throw new Error('No valid questions could be extracted from the AI response');
       }
 
-      return validated;
-    } catch (err) {
-      return this.handleGeminiError(err);
-    }
+      return questionsList;
+    });
+
+    return validated;
   }
 
   /**
-   * 2. AI Study Assistant (Q&A / Doubt Solver)
-   * Pluggable context / RAG-ready
+   * Regenerates a single question with Gemini
    */
-  public async askStudyAssistant(params: {
-    question: string;
-    context?: string;
+  public async generateSingleQuestion(params: {
+    topic: string;
+    difficulty: 'EASY' | 'MEDIUM' | 'HARD';
     subjectName?: string;
-    conversationHistory?: Array<{ role: 'user' | 'model'; parts: string }>;
-  }): Promise<string> {
-    this.checkConfigured();
-
-    const { question, context, subjectName } = params;
-
-    const systemPrompt = `You are VidyaSetu AI, an expert, encouraging university teaching assistant.
-Your goal is to help college students understand their course material, resolve academic doubts, clarify conceptual subtleties, and prepare for examinations.
-Subject: ${subjectName || 'General Academic Curriculum'}
-${context ? `Reference Study Context / Syllabus:\n${context}\n` : ''}
-
-GUIDELINES:
-- Provide clear, structured, and pedagogical explanations.
-- Use markdown formatting (bolding, bullet points, numbered steps, code blocks where appropriate).
-- If the question is outside academic scope, politely steer the student back to coursework.
-- Keep responses engaging, accurate, and concise.`;
-
-    try {
-      const model = this.genAI!.getGenerativeModel({
-        model: this.defaultModel,
-        generationConfig: {
-          temperature: 0.6,
-          maxOutputTokens: 1200,
-        },
-      });
-
-      const fullPrompt = `${systemPrompt}\n\nStudent Question: ${question}\n\nAssistant Response:`;
-
-      const result = await this.executeWithTimeout(async () => {
-        const res = await model.generateContent(fullPrompt);
-        return res.response.text();
-      });
-
-      if (!result || result.trim() === '') {
-        throw new Error('AI returned an empty response');
-      }
-
-      return result.trim();
-    } catch (err) {
-      return this.handleGeminiError(err);
+    moduleTitle?: string;
+    questionType?: 'MCQ' | 'TRUE_FALSE';
+    avoidQuestionText?: string;
+  }): Promise<GeneratedQuizQuestion> {
+    const list = await this.generateMCQQuestions({
+      topic: params.avoidQuestionText ? `${params.topic} (distinct from: ${params.avoidQuestionText.slice(0, 80)})` : params.topic,
+      difficulty: params.difficulty,
+      numberOfQuestions: 1,
+      subjectName: params.subjectName,
+      moduleTitle: params.moduleTitle,
+      questionType: params.questionType,
+    });
+    if (list.length === 0) {
+      throw new Error('Failed to regenerate question');
     }
+    return list[0];
   }
 
   /**
@@ -282,25 +473,23 @@ REQUIREMENTS:
 Return a JSON object with exactly these keys:
 {
   "summary": "A concise executive summary covering the material in 2-3 paragraphs",
-  "keyConcepts": ["Concept 1 with brief definition", "Concept 2 with brief definition", ...],
-  "importantPoints": ["Key takeaway point 1", "Key takeaway point 2", ...],
-  "possibleExamQuestions": ["Sample exam question 1", "Sample exam question 2", ...]
+  "keyConcepts": ["Concept 1 with brief definition", "Concept 2 with brief definition"],
+  "importantPoints": ["Key takeaway point 1", "Key takeaway point 2"],
+  "possibleExamQuestions": ["Sample exam question 1", "Sample exam question 2"]
 }
 Output valid JSON only.`;
 
-    try {
+    const { result: summaryResult } = await this.executeWithModelFallback(async (modelName) => {
       const model = this.genAI!.getGenerativeModel({
-        model: this.defaultModel,
+        model: modelName,
         generationConfig: {
           responseMimeType: 'application/json',
           temperature: 0.3,
         },
       });
 
-      const resultText = await this.executeWithTimeout(async () => {
-        const res = await model.generateContent(prompt);
-        return res.response.text();
-      });
+      const res = await model.generateContent(prompt);
+      const resultText = res.response.text();
 
       if (!resultText || resultText.trim() === '') {
         throw new Error('AI returned an empty summary response');
@@ -321,9 +510,9 @@ Output valid JSON only.`;
         importantPoints: Array.isArray(parsed.importantPoints) ? parsed.importantPoints.map(String) : [],
         possibleExamQuestions: Array.isArray(parsed.possibleExamQuestions) ? parsed.possibleExamQuestions.map(String) : [],
       };
-    } catch (err) {
-      return this.handleGeminiError(err);
-    }
+    });
+
+    return summaryResult;
   }
 }
 

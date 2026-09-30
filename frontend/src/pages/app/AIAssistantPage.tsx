@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AIServiceClient, AcademicService } from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
 import { Subject } from '../../types';
+import { AIMarkdownRenderer } from '../../components/common/AIMarkdownRenderer';
 import {
   Sparkles,
   Send,
@@ -24,6 +25,9 @@ interface ChatMessage {
   text: string;
   timestamp: string;
   source?: string;
+  model?: string;
+  isError?: boolean;
+  failedQuery?: string;
 }
 
 export const AIAssistantPage: React.FC = () => {
@@ -80,11 +84,11 @@ export const AIAssistantPage: React.FC = () => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, asking]);
 
-  const handleAsk = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputQuestion.trim() || asking) return;
+  const handleAsk = async (e?: React.FormEvent, overrideQuestion?: string) => {
+    if (e) e.preventDefault();
+    const userText = (overrideQuestion !== undefined ? overrideQuestion : inputQuestion).trim();
+    if (!userText || asking) return;
 
-    const userText = inputQuestion.trim();
     const currentContext = inputContext.trim();
     const userMsg: ChatMessage = {
       id: String(Date.now()),
@@ -94,32 +98,54 @@ export const AIAssistantPage: React.FC = () => {
     };
 
     setMessages(prev => [...prev, userMsg]);
-    setInputQuestion('');
+    if (overrideQuestion === undefined) {
+      setInputQuestion('');
+    }
     setAsking(true);
+
+    const selectedSubject = subjects.find(s => s.id === selectedSubjectId);
+    const subjectName = selectedSubject ? `${selectedSubject.code} - ${selectedSubject.name}` : undefined;
+
+    // Send conversation context from current session (last 6 messages)
+    const conversationHistory = messages
+      .filter(m => m.id !== 'welcome' && !m.isError)
+      .slice(-6)
+      .map(m => ({
+        role: m.sender === 'user' ? ('user' as const) : ('model' as const),
+        text: m.text,
+      }));
 
     try {
       const res = await AIServiceClient.askQuestion({
         question: userText,
         context: currentContext || undefined,
         subjectId: selectedSubjectId || undefined,
+        subjectName,
+        conversationHistory,
       });
 
-      if (res.data.success && res.data.data) {
+      const responseAnswer = res.data.answer || res.data.data?.answer;
+      if (res.data.success && responseAnswer) {
         const assistantMsg: ChatMessage = {
           id: String(Date.now() + 1),
           sender: 'assistant',
-          text: res.data.data.answer,
+          text: responseAnswer,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          source: res.data.data.source,
+          source: res.data.source || res.data.data?.source || 'GEMINI',
+          model: res.data.model || res.data.data?.model,
         };
         setMessages(prev => [...prev, assistantMsg]);
+      } else {
+        throw new Error(res.data.message || 'No answer returned from AI service');
       }
     } catch (err: any) {
       const errMsg: ChatMessage = {
         id: String(Date.now() + 1),
         sender: 'assistant',
-        text: `⚠️ **Error:** ${err.response?.data?.message || 'Unable to contact the AI Study Assistant. Please try again.'}`,
+        text: `⚠️ **Unable to process query:** ${err.response?.data?.message || err.message || 'Unable to contact the AI Study Assistant. Please try again.'}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isError: true,
+        failedQuery: userText,
       };
       setMessages(prev => [...prev, errMsg]);
     } finally {
@@ -283,16 +309,42 @@ export const AIAssistantPage: React.FC = () => {
                     className={`max-w-[85%] rounded-2xl p-4 text-xs leading-relaxed shadow-xs ${
                       msg.sender === 'user'
                         ? 'bg-brand-600 text-white rounded-br-none'
+                        : msg.isError
+                        ? 'bg-rose-50/90 text-rose-900 border border-rose-200 rounded-bl-none'
                         : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'
                     }`}
                   >
-                    <div className="flex items-center justify-between mb-1.5 opacity-80 text-[10px]">
-                      <span className="font-bold">
-                        {msg.sender === 'user' ? 'You' : 'VidyaSetu AI'}
-                      </span>
+                    <div className="flex items-center justify-between mb-1.5 opacity-80 text-[10px] gap-2">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <span>{msg.sender === 'user' ? 'You' : 'VidyaSetu AI'}</span>
+                        {msg.sender === 'assistant' && msg.model && (
+                          <span className="rounded bg-purple-100 px-1.5 py-0.2 text-[9px] font-medium text-purple-700">
+                            {msg.model}
+                          </span>
+                        )}
+                      </div>
                       <span>{msg.timestamp}</span>
                     </div>
-                    <div className="whitespace-pre-line prose-xs">{msg.text}</div>
+
+                    {msg.sender === 'user' ? (
+                      <div className="whitespace-pre-wrap select-text font-normal text-xs text-white">
+                        {msg.text}
+                      </div>
+                    ) : (
+                      <AIMarkdownRenderer content={msg.text} />
+                    )}
+
+                    {msg.isError && msg.failedQuery && (
+                      <button
+                        type="button"
+                        onClick={() => handleAsk(undefined, msg.failedQuery)}
+                        disabled={asking}
+                        className="mt-3 inline-flex items-center text-[11px] font-semibold text-rose-700 hover:text-rose-800 bg-white hover:bg-rose-100 border border-rose-300 rounded-lg px-2.5 py-1 transition disabled:opacity-50 shadow-xs"
+                      >
+                        <RotateCcw className="mr-1.5 h-3 w-3" />
+                        Retry question
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -315,7 +367,15 @@ export const AIAssistantPage: React.FC = () => {
               <input
                 value={inputQuestion}
                 onChange={e => setInputQuestion(e.target.value)}
-                placeholder="Ask an academic question or doubt..."
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (inputQuestion.trim() && !asking) {
+                      handleAsk();
+                    }
+                  }
+                }}
+                placeholder="Ask an academic question or doubt (Press Enter to ask)..."
                 className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs focus:border-brand-500 focus:bg-white focus:outline-none"
               />
               <button

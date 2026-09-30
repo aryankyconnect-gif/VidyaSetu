@@ -347,6 +347,9 @@ export const getSubjects = async (req: Request, res: Response, next: NextFunctio
       include: {
         department: true,
         semester: true,
+        modules: {
+          orderBy: { orderIndex: 'asc' },
+        },
         faculty: {
           include: {
             user: {

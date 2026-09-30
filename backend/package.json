@@ -25,6 +25,7 @@
     "helmet": "^7.0.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
+    "pdf-parse": "^1.1.1",
     "prisma": "^5.13.0"
   },
   "devDependencies": {
@@ -35,6 +36,7 @@
     "@types/jsonwebtoken": "^9.0.5",
     "@types/morgan": "^1.9.7",
     "@types/node": "^20.12.7",
+    "@types/pdf-parse": "^1.1.5",
     "eslint": "^8.57.0",
     "eslint-plugin-import": "^2.29.1",
     "eslint-plugin-node": "^11.1.0",

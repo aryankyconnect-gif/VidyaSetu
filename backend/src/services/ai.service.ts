@@ -11,14 +11,34 @@ export interface AISummaryRequest {
 export interface AIGenerateQuizRequest {
   topic: string;
   subjectId?: string;
+  moduleId?: string;
   numberOfQuestions: number;
   difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
+  questionType?: 'MCQ' | 'TRUE_FALSE';
+}
+
+export interface AIRegenerateQuestionRequest {
+  topic: string;
+  subjectId?: string;
+  moduleId?: string;
+  difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
+  questionType?: 'MCQ' | 'TRUE_FALSE';
+  avoidQuestionText?: string;
 }
 
 export interface AIAskRequest {
   question: string;
   context?: string;
   subjectId?: string;
+  subjectName?: string;
+  conversationHistory?: Array<{ role: 'user' | 'model' | 'assistant'; text: string }>;
+}
+
+export interface AIAskResponse {
+  answer: string;
+  subject: string;
+  model: string;
+  source: string;
 }
 
 export interface AIDraftAnnouncementRequest {
@@ -53,131 +73,122 @@ export class AIService {
     const topic = req.topic.trim();
     const difficulty = (req.difficulty || 'MEDIUM') as 'EASY' | 'MEDIUM' | 'HARD';
     const requestedCount = Math.min(Math.max(req.numberOfQuestions || 5, 1), 20);
+    const questionType = req.questionType || 'MCQ';
 
-    logger.info(`AI Quiz Request: topic="${topic}", difficulty="${difficulty}", count=${requestedCount}`);
-
-    // Step 1: Query AI Question Bank for existing matching questions
-    const existingInBank = await prisma.aiQuestionBank.findMany({
-      where: {
-        AND: [
-          {
-            OR: [
-              { topic: { contains: topic, mode: 'insensitive' } },
-              ...(req.subjectId ? [{ subjectId: req.subjectId }] : []),
-            ],
-          },
-          { difficulty },
-        ],
-      },
-      orderBy: { usageCount: 'asc' }, // Prefer less frequently used questions for variety
-      take: requestedCount,
-    });
-
-    const parsedExisting: GeneratedQuizQuestion[] = existingInBank.map(item => ({
-      question: item.question,
-      options: JSON.parse(item.optionsJson || '[]'),
-      correctAnswer: item.correctAnswer,
-      explanation: item.explanation || 'Verified question from VidyaSetu question bank.',
-      difficulty: item.difficulty as 'EASY' | 'MEDIUM' | 'HARD',
-      topic: item.topic,
-    }));
-
-    // If we have enough cached questions, reuse them directly!
-    if (parsedExisting.length >= requestedCount) {
-      const selected = parsedExisting.slice(0, requestedCount);
-      const selectedIds = existingInBank.slice(0, requestedCount).map(q => q.id);
-
-      // Increment usage count asynchronously
-      prisma.aiQuestionBank.updateMany({
-        where: { id: { in: selectedIds } },
-        data: { usageCount: { increment: 1 } },
-      }).catch(err => logger.error(`Failed to update question usage count: ${err.message}`));
-
-      logger.info(`AI Question Bank: Reused ${selected.length} questions from PostgreSQL (0 Gemini calls consumed).`);
-      return {
-        questions: selected,
-        reusedFromBank: selected.length,
-        newlyGenerated: 0,
-        source: 'DATABASE_BANK',
-      };
-    }
-
-    // Step 2: More questions needed — Call Gemini API
-    const remainingToGenerate = requestedCount - parsedExisting.length;
+    logger.info(`AI Quiz Request: topic="${topic}", difficulty="${difficulty}", count=${requestedCount}, type=${questionType}`);
 
     let subjectName: string | undefined;
+    let moduleTitle: string | undefined;
+
     if (req.subjectId) {
       const subject = await prisma.subject.findUnique({
         where: { id: req.subjectId },
         select: { name: true, code: true },
       });
-      if (subject) subjectName = `${subject.code}: ${subject.name}`;
+      if (subject) subjectName = `${subject.code} - ${subject.name}`;
+    }
+
+    if (req.moduleId) {
+      const moduleItem = await prisma.module.findUnique({
+        where: { id: req.moduleId },
+        select: { title: true },
+      });
+      if (moduleItem) moduleTitle = moduleItem.title;
     }
 
     let newlyGeneratedQuestions: GeneratedQuizQuestion[] = [];
 
+    // Step 1: Call Gemini for fresh AI generation
     if (this.isConfigured()) {
       try {
         newlyGeneratedQuestions = await geminiService.generateMCQQuestions({
           topic,
           difficulty,
-          numberOfQuestions: remainingToGenerate,
+          numberOfQuestions: requestedCount,
           subjectName,
+          moduleTitle,
+          questionType,
         });
       } catch (err: any) {
-        logger.error(`Gemini generation failed: ${err.message}`);
-        // If we had some existing questions in bank, return what we have
-        if (parsedExisting.length > 0) {
-          return {
-            questions: parsedExisting,
-            reusedFromBank: parsedExisting.length,
-            newlyGenerated: 0,
-            source: 'DATABASE_BANK',
-          };
-        }
-        throw err;
+        logger.error(`Gemini quiz generation failed: ${err.message}. Attempting fallback.`);
       }
-    } else {
-      // Offline fallback when no API key is provided
-      logger.warn('Gemini API is not configured; generating structured fallback questions.');
+    }
+
+    // Step 2: Fallback to Question Bank or Structured Template if Gemini is unavailable
+    if (newlyGeneratedQuestions.length === 0) {
+      const existingInBank = await prisma.aiQuestionBank.findMany({
+        where: {
+          AND: [
+            {
+              OR: [
+                { topic: { contains: topic, mode: 'insensitive' } },
+                ...(req.subjectId ? [{ subjectId: req.subjectId }] : []),
+              ],
+            },
+            { difficulty },
+          ],
+        },
+        orderBy: { usageCount: 'asc' },
+        take: requestedCount,
+      });
+
+      if (existingInBank.length > 0) {
+        return {
+          questions: existingInBank.map(item => ({
+            question: item.question,
+            options: JSON.parse(item.optionsJson || '[]'),
+            correctAnswer: item.correctAnswer,
+            explanation: item.explanation || 'Verified question from question bank.',
+            difficulty: item.difficulty as 'EASY' | 'MEDIUM' | 'HARD',
+            topic: item.topic,
+            questionType: questionType === 'TRUE_FALSE' ? 'TRUE_FALSE' : 'MULTIPLE_CHOICE',
+          })),
+          reusedFromBank: existingInBank.length,
+          newlyGenerated: 0,
+          source: 'DATABASE_BANK',
+        };
+      }
+
+      // Template fallback
       newlyGeneratedQuestions = [
         {
-          question: `In the context of ${topic}, what is the fundamental invariant preserved during standard operations?`,
+          question: `In the study of ${topic}, which fundamental property must hold to ensure system correctness?`,
           options: [
-            'Consistent state transitions and data integrity',
-            'Arbitrary latency degradation without bounds',
-            'Bypassing relational constraints',
-            'Unsynchronized concurrent state updates',
+            'Consistent state transitions and invariant preservation',
+            'Unsynchronized concurrent state mutation without locks',
+            'O(N!) computational overhead in best-case scenarios',
+            'Bypassing boundary assertions during execution',
           ],
-          correctAnswer: 'Consistent state transitions and data integrity',
-          explanation: `System invariants in ${topic} ensure that safety properties hold regardless of concurrency.`,
+          correctAnswer: 'Consistent state transitions and invariant preservation',
+          explanation: `Invariants in ${topic} ensure that safety properties hold regardless of concurrency.`,
           difficulty,
           topic,
+          questionType: 'MULTIPLE_CHOICE',
         },
         {
-          question: `Which algorithmic property is most critical when evaluating ${topic}?`,
+          question: `Which asymptotic metric is most critical when evaluating ${topic}?`,
           options: [
-            'Time and space asymptotic complexity',
-            'Random execution scheduling',
-            'Hardcoded buffer capacities',
-            'Ignoring edge cases in boundary conditions',
+            'Time and space asymptotic complexity bounds',
+            'Random instruction reordering without synchronization',
+            'Arbitrary stack frame resizing',
+            'Ignoring edge cases in recursive termination',
           ],
-          correctAnswer: 'Time and space asymptotic complexity',
+          correctAnswer: 'Time and space asymptotic complexity bounds',
           explanation: 'Academic evaluation prioritizes asymptotic complexity bounds.',
           difficulty,
           topic,
+          questionType: 'MULTIPLE_CHOICE',
         },
       ];
     }
 
-    // Step 3: Save newly generated questions to AI Question Bank (preventing duplicate questions)
+    // Step 3: Persist newly generated questions in PostgreSQL
     const existingNormalized = new Set(
       (await prisma.aiQuestionBank.findMany({ select: { question: true } })).map(q =>
         this.normalizeText(q.question)
       )
     );
 
-    let savedCount = 0;
     for (const q of newlyGeneratedQuestions) {
       const norm = this.normalizeText(q.question);
       if (!existingNormalized.has(norm)) {
@@ -196,30 +207,79 @@ export class AIService {
             },
           });
           existingNormalized.add(norm);
-          savedCount++;
         } catch (dbErr: any) {
           logger.error(`Failed to save question to bank: ${dbErr.message}`);
         }
       }
     }
 
-    const merged = [...parsedExisting, ...newlyGeneratedQuestions].slice(0, requestedCount);
+    return {
+      questions: newlyGeneratedQuestions.slice(0, requestedCount),
+      reusedFromBank: 0,
+      newlyGenerated: newlyGeneratedQuestions.length,
+      source: this.isConfigured() ? 'GEMINI' : 'FALLBACK',
+    };
+  }
+
+  /**
+   * Regenerates a single question with Gemini
+   */
+  public async regenerateSingleQuestion(req: AIRegenerateQuestionRequest): Promise<GeneratedQuizQuestion> {
+    const topic = req.topic.trim();
+    const difficulty = (req.difficulty || 'MEDIUM') as 'EASY' | 'MEDIUM' | 'HARD';
+    let subjectName: string | undefined;
+    let moduleTitle: string | undefined;
+
+    if (req.subjectId) {
+      const subject = await prisma.subject.findUnique({
+        where: { id: req.subjectId },
+        select: { name: true, code: true },
+      });
+      if (subject) subjectName = `${subject.code} - ${subject.name}`;
+    }
+
+    if (req.moduleId) {
+      const moduleItem = await prisma.module.findUnique({
+        where: { id: req.moduleId },
+        select: { title: true },
+      });
+      if (moduleItem) moduleTitle = moduleItem.title;
+    }
+
+    if (this.isConfigured()) {
+      return await geminiService.generateSingleQuestion({
+        topic,
+        difficulty,
+        subjectName,
+        moduleTitle,
+        questionType: req.questionType,
+        avoidQuestionText: req.avoidQuestionText,
+      });
+    }
 
     return {
-      questions: merged,
-      reusedFromBank: parsedExisting.length,
-      newlyGenerated: newlyGeneratedQuestions.length,
-      source: parsedExisting.length > 0 ? 'HYBRID' : (this.isConfigured() ? 'GEMINI' : 'FALLBACK'),
+      question: `Which fundamental principle is central to the design and operation of ${topic}?`,
+      options: [
+        'Consistent state transitions and data integrity',
+        'O(N^3) brute-force recursion without memoization',
+        'Bypassing validation layers during runtime execution',
+        'Unsynchronized concurrent state updates',
+      ],
+      correctAnswer: 'Consistent state transitions and data integrity',
+      explanation: `System invariants in ${topic} ensure that safety properties hold regardless of concurrency.`,
+      difficulty,
+      topic,
+      questionType: 'MULTIPLE_CHOICE',
     };
   }
 
   /**
    * 2. AI Study Assistant (Ask doubts / RAG-ready)
    */
-  public async askStudyAssistant(req: AIAskRequest): Promise<{ answer: string; source: string }> {
+  public async askStudyAssistant(req: AIAskRequest): Promise<AIAskResponse> {
     logger.info(`AI Study Assistant asked: "${req.question.slice(0, 60)}"`);
 
-    let subjectName: string | undefined;
+    let subjectName: string | undefined = req.subjectName;
     let enrichedContext = req.context || '';
 
     // If subjectId provided, enrich context with subject syllabus & modules
@@ -239,17 +299,25 @@ export class AIService {
     }
 
     if (this.isConfigured()) {
-      const answer = await geminiService.askStudyAssistant({
+      const { answer, model } = await geminiService.askStudyAssistant({
         question: req.question,
         context: enrichedContext || undefined,
         subjectName,
+        conversationHistory: req.conversationHistory,
       });
-      return { answer, source: 'GEMINI' };
+      return {
+        answer,
+        subject: subjectName || 'General Academic Coursework',
+        model,
+        source: 'GEMINI',
+      };
     }
 
     // Informative fallback
     return {
       answer: `### Academic Insight on "${req.question}"\n\nWhen studying this concept in **${subjectName || 'your coursework'}**, remember:\n\n1. **Core Principle:** Ensure you understand the underlying definitions, mathematical formalisms, and system invariants.\n2. **Practical Application:** Review relevant code implementations and standard algorithmic paradigms discussed in class.\n3. **Exam Readiness:** Practice solving past year problems and tracing corner cases.\n\n*(Note: Configure \`GEMINI_API_KEY\` in backend/.env for live conversational responses).*`,
+      subject: subjectName || 'General Academic Coursework',
+      model: 'system-fallback',
       source: 'FALLBACK',
     };
   }
@@ -302,7 +370,7 @@ export class AIService {
         });
         return {
           title: `Notice: ${req.topic}`,
-          body: result,
+          body: result.answer,
         };
       } catch (err) {
         logger.error('Failed to draft with Gemini, using template');

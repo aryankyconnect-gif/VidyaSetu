@@ -372,7 +372,7 @@ export const getFacultyAnalytics = async (req: Request, res: Response, next: Nex
         submissions: {
           include: {
             grade: true,
-            student: { include: { user: { select: { name: true, rollNumber: true } as any } } },
+            student: { include: { user: { select: { name: true, email: true } } } },
           },
         },
       },
@@ -443,7 +443,7 @@ export const getFacultyAnalytics = async (req: Request, res: Response, next: Nex
       allQuizAttemptsCount += attemptsCount;
 
       const avgScore =
-        attemptsCount > 0
+        attemptsCount > 0 && q.totalMarks > 0
           ? Math.round(
               (q.attempts.reduce((acc, att) => acc + att.score, 0) / (attemptsCount * q.totalMarks)) * 100
             )
@@ -556,13 +556,13 @@ export const getFacultyAnalytics = async (req: Request, res: Response, next: Nex
           email: faculty.user.email,
           employeeId: faculty.employeeId,
           designation: faculty.designation,
-          department: faculty.department.name,
+          department: faculty.department?.name || 'Academic Department',
           subjectsCount: faculty.subjects.length,
           subjects: faculty.subjects.map((s) => ({
             id: s.id,
             code: s.code,
             name: s.name,
-            enrolledStudents: s.enrollments.length,
+            enrolledStudents: s.enrollments ? s.enrollments.length : 0,
           })),
         },
         assignmentSubmissionStats: {

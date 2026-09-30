@@ -7,6 +7,9 @@ import {
   createAssignment,
   submitAssignment,
   gradeSubmission,
+  deleteAssignment,
+  getAssignmentSimilarity,
+  recalculateAssignmentSimilarity,
 } from '../controllers/assignment.controller';
 import { authenticate } from '../middleware/auth';
 import { authorizeRoles } from '../middleware/role';
@@ -19,6 +22,19 @@ router.use(authenticate);
 
 router.get('/', getAssignments);
 router.get('/:id', getAssignmentById);
+
+// Similarity Detection & Analysis (Faculty & Admin only)
+router.get(
+  '/:id/similarity',
+  authorizeRoles(Role.ADMIN, Role.FACULTY),
+  getAssignmentSimilarity
+);
+
+router.post(
+  '/:id/similarity/recalculate',
+  authorizeRoles(Role.ADMIN, Role.FACULTY),
+  recalculateAssignmentSimilarity
+);
 
 // Create Assignment (Faculty & Admin)
 router.post(
@@ -52,5 +68,8 @@ router.post(
   validateRequest,
   gradeSubmission
 );
+
+// Delete Assignment (Faculty & Admin)
+router.delete('/:id', authorizeRoles(Role.ADMIN, Role.FACULTY), deleteAssignment);
 
 export default router;

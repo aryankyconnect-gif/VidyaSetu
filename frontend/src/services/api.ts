@@ -146,6 +146,10 @@ export const AssignmentService = {
     api.post(`/assignments/${id}/submit`, data),
   gradeSubmission: (submissionId: string, data: { marksObtained: number; feedback?: string }) =>
     api.post(`/assignments/submissions/${submissionId}/grade`, data),
+  getAssignmentSimilarity: (id: string, params?: { filter?: string; search?: string }) =>
+    api.get(`/assignments/${id}/similarity`, { params }),
+  recalculateSimilarity: (id: string) =>
+    api.post(`/assignments/${id}/similarity/recalculate`),
 };
 
 export const QuizService = {
@@ -232,10 +236,29 @@ export const AnalyticsService = {
 
 export const AIServiceClient = {
   getStatus: () => api.get('/ai/status'),
-  generateQuiz: (params: { topic: string; numberOfQuestions?: number; difficulty?: string; subjectId?: string }) =>
-    api.post('/ai/quiz/generate', params),
-  askQuestion: (params: { question: string; context?: string; subjectId?: string }) =>
-    api.post('/ai/ask', params),
+  generateQuiz: (params: {
+    topic: string;
+    numberOfQuestions?: number;
+    difficulty?: string;
+    subjectId?: string;
+    moduleId?: string;
+    questionType?: string;
+  }) => api.post('/ai/quiz/generate', params),
+  regenerateQuestion: (params: {
+    topic: string;
+    difficulty?: string;
+    subjectId?: string;
+    moduleId?: string;
+    questionType?: string;
+    avoidQuestionText?: string;
+  }) => api.post('/ai/quiz/regenerate-question', params),
+  askQuestion: (params: {
+    question: string;
+    context?: string;
+    subjectId?: string;
+    subjectName?: string;
+    conversationHistory?: Array<{ role: 'user' | 'model' | 'assistant'; text: string }>;
+  }) => api.post('/ai/ask', params),
   summarize: (data: { title?: string; content: string } | string, legacyContent?: string) => {
     if (typeof data === 'string') {
       return api.post('/ai/summarize', { title: data, content: legacyContent || '' });

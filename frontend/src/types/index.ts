@@ -240,6 +240,58 @@ export interface Grade {
   gradedAt: string;
 }
 
+export interface MatchedPassage {
+  textA: string;
+  textB: string;
+  length: number;
+}
+
+export interface SubmissionSimilarityPair {
+  id: string;
+  assignmentId: string;
+  similarityScore: number;
+  riskLevel: 'HIGH' | 'MEDIUM' | 'LOW';
+  matchedPassages: MatchedPassage[];
+  submissionA: {
+    id: string;
+    student: {
+      id: string;
+      rollNumber: string;
+      user: {
+        id: string;
+        name: string;
+        email: string;
+        avatarUrl?: string;
+      };
+    };
+    fileUrl?: string;
+    content?: string;
+    extractedText?: string;
+    extractionStatus?: string;
+    grade?: Grade;
+    submittedAt: string;
+  };
+  submissionB: {
+    id: string;
+    student: {
+      id: string;
+      rollNumber: string;
+      user: {
+        id: string;
+        name: string;
+        email: string;
+        avatarUrl?: string;
+      };
+    };
+    fileUrl?: string;
+    content?: string;
+    extractedText?: string;
+    extractionStatus?: string;
+    grade?: Grade;
+    submittedAt: string;
+  };
+}
+
 export interface Question {
   id: string;
   quizId: string;

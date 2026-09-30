@@ -17,6 +17,11 @@ import {
   Plus,
   BookOpen,
   Check,
+  Pencil,
+  Trash2,
+  RefreshCw,
+  FileText,
+  Layers,
 } from 'lucide-react';
 
 export const QuizzesPage: React.FC = () => {
@@ -38,9 +43,11 @@ export const QuizzesPage: React.FC = () => {
   // AI Quiz Generator Modal state
   const [showAiModal, setShowAiModal] = useState(false);
   const [aiSubjectId, setAiSubjectId] = useState('');
+  const [aiModuleId, setAiModuleId] = useState('');
   const [aiTopic, setAiTopic] = useState('');
   const [aiDifficulty, setAiDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
   const [aiQuestionCount, setAiQuestionCount] = useState(5);
+  const [aiQuestionType, setAiQuestionType] = useState<'MCQ' | 'TRUE_FALSE'>('MCQ');
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiGeneratedData, setAiGeneratedData] = useState<{
     questions: any[];
@@ -50,6 +57,8 @@ export const QuizzesPage: React.FC = () => {
   } | null>(null);
   const [aiQuizTitle, setAiQuizTitle] = useState('');
   const [savingQuiz, setSavingQuiz] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [regeneratingIndex, setRegeneratingIndex] = useState<number | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -110,19 +119,22 @@ export const QuizzesPage: React.FC = () => {
     if (!aiTopic.trim()) return;
 
     setAiGenerating(true);
+    setEditingIndex(null);
     try {
       const res = await AIServiceClient.generateQuiz({
         topic: aiTopic.trim(),
         subjectId: aiSubjectId || undefined,
+        moduleId: aiModuleId || undefined,
         difficulty: aiDifficulty,
         numberOfQuestions: aiQuestionCount,
+        questionType: aiQuestionType,
       });
 
       if (res.data.success && res.data.data) {
         setAiGeneratedData(res.data.data);
         const sub = subjects.find(s => s.id === aiSubjectId);
         setAiQuizTitle(
-          `${sub ? sub.code + ' - ' : ''}${aiTopic} (${aiDifficulty.toLowerCase()} quiz)`
+          `${sub ? sub.code + ' - ' : ''}${aiTopic} (${aiDifficulty.toLowerCase()} ${aiQuestionType === 'TRUE_FALSE' ? 'T/F' : 'MCQ'})`
         );
       }
     } catch (err: any) {
@@ -132,16 +144,109 @@ export const QuizzesPage: React.FC = () => {
     }
   };
 
-  const handleSaveAsLiveQuiz = async () => {
+  const handleRegenerateQuestion = async (idx: number) => {
+    if (!aiGeneratedData || regeneratingIndex !== null) return;
+    const currentQ = aiGeneratedData.questions[idx];
+    setRegeneratingIndex(idx);
+    try {
+      const res = await AIServiceClient.regenerateQuestion({
+        topic: aiTopic.trim(),
+        difficulty: aiDifficulty,
+        subjectId: aiSubjectId || undefined,
+        moduleId: aiModuleId || undefined,
+        questionType: aiQuestionType,
+        avoidQuestionText: currentQ?.question,
+      });
+      if (res.data.success && res.data.data) {
+        const updatedQuestions = [...aiGeneratedData.questions];
+        updatedQuestions[idx] = res.data.data;
+        setAiGeneratedData({
+          ...aiGeneratedData,
+          questions: updatedQuestions,
+        });
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Failed to regenerate question');
+    } finally {
+      setRegeneratingIndex(null);
+    }
+  };
+
+  const handleDeleteQuestion = (idx: number) => {
+    if (!aiGeneratedData) return;
+    const updated = aiGeneratedData.questions.filter((_, i) => i !== idx);
+    setAiGeneratedData({
+      ...aiGeneratedData,
+      questions: updated,
+    });
+    if (editingIndex === idx) {
+      setEditingIndex(null);
+    } else if (editingIndex !== null && editingIndex > idx) {
+      setEditingIndex(editingIndex - 1);
+    }
+  };
+
+  const handleUpdateQuestion = (idx: number, updatedFields: any) => {
+    if (!aiGeneratedData) return;
+    const updated = [...aiGeneratedData.questions];
+    updated[idx] = { ...updated[idx], ...updatedFields };
+    setAiGeneratedData({
+      ...aiGeneratedData,
+      questions: updated,
+    });
+  };
+
+  const handleAddManualQuestion = () => {
+    if (!aiGeneratedData) return;
+    const isTF = aiQuestionType === 'TRUE_FALSE';
+    const newQ = {
+      question: '',
+      options: isTF ? ['True', 'False'] : ['Option A', 'Option B', 'Option C', 'Option D'],
+      correctAnswer: isTF ? 'True' : 'Option A',
+      explanation: '',
+      difficulty: aiDifficulty,
+    };
+    const newIndex = aiGeneratedData.questions.length;
+    setAiGeneratedData({
+      ...aiGeneratedData,
+      questions: [...aiGeneratedData.questions, newQ],
+    });
+    setEditingIndex(newIndex);
+  };
+
+  const handleSaveQuiz = async (publish: boolean) => {
     if (!aiGeneratedData || !aiSubjectId || !aiQuizTitle.trim()) return;
+    if (!aiGeneratedData.questions || aiGeneratedData.questions.length === 0) {
+      alert('Please add or generate at least one question.');
+      return;
+    }
+
+    for (let i = 0; i < aiGeneratedData.questions.length; i++) {
+      const q = aiGeneratedData.questions[i];
+      if (!q.question || !q.question.trim()) {
+        alert(`Question #${i + 1} has empty question text. Please provide question text or delete it.`);
+        return;
+      }
+      if (!Array.isArray(q.options) || q.options.some((opt: string) => !opt || !opt.trim())) {
+        alert(`Question #${i + 1} has one or more empty options. Please fill all options.`);
+        return;
+      }
+      if (!q.correctAnswer || !q.options.includes(q.correctAnswer)) {
+        alert(`Question #${i + 1} correct answer "${q.correctAnswer}" must match one of the options.`);
+        return;
+      }
+    }
 
     setSavingQuiz(true);
     try {
       const questionsPayload = aiGeneratedData.questions.map((q: any) => ({
-        questionText: q.question,
-        questionType: 'MULTIPLE_CHOICE',
-        options: q.options,
-        correctAnswer: q.correctAnswer,
+        questionText: q.question.trim(),
+        questionType:
+          q.options?.length === 2 && (q.options.includes('True') || q.options.includes('true'))
+            ? 'TRUE_FALSE'
+            : 'MULTIPLE_CHOICE',
+        options: q.options.map((opt: string) => opt.trim()),
+        correctAnswer: q.correctAnswer.trim(),
         marks: 5,
       }));
 
@@ -151,16 +256,18 @@ export const QuizzesPage: React.FC = () => {
         subjectId: aiSubjectId,
         timeLimitMinutes: Math.max(aiGeneratedData.questions.length * 3, 10),
         totalMarks: aiGeneratedData.questions.length * 5,
-        isPublished: true,
+        isPublished: publish,
         questions: questionsPayload,
       });
 
       setShowAiModal(false);
       setAiGeneratedData(null);
       setAiTopic('');
+      setAiModuleId('');
+      setEditingIndex(null);
       load();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to create live quiz');
+      alert(err.response?.data?.message || `Failed to ${publish ? 'publish' : 'save'} quiz`);
     } finally {
       setSavingQuiz(false);
     }
@@ -298,7 +405,7 @@ export const QuizzesPage: React.FC = () => {
       {/* AI Quiz Generator Modal */}
       {showAiModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 overflow-y-auto">
-          <div className="my-8 w-full max-w-3xl rounded-2xl bg-white shadow-2xl border border-slate-200 max-h-[90vh] flex flex-col overflow-hidden">
+          <div className="my-8 w-full max-w-4xl rounded-2xl bg-white shadow-2xl border border-slate-200 max-h-[92vh] flex flex-col overflow-hidden">
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4 bg-purple-50/50">
               <div className="flex items-center space-x-2">
@@ -308,11 +415,16 @@ export const QuizzesPage: React.FC = () => {
                 <div>
                   <h3 className="text-base font-bold text-slate-900">AI Quiz Generator</h3>
                   <p className="text-xs text-slate-500">
-                    Generates MCQs with Gemini and checks the PostgreSQL Question Bank for smart reuse.
+                    Generate strict structured questions via Gemini with Question Bank caching & review workflow.
                   </p>
                 </div>
               </div>
-              <button onClick={() => setShowAiModal(false)}>
+              <button
+                onClick={() => {
+                  setShowAiModal(false);
+                  setEditingIndex(null);
+                }}
+              >
                 <X className="h-5 w-5 text-slate-400 hover:text-slate-600" />
               </button>
             </div>
@@ -320,13 +432,16 @@ export const QuizzesPage: React.FC = () => {
             {/* Modal Body */}
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {/* Form Controls */}
-              <form onSubmit={handleGenerateAiQuiz} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <form onSubmit={handleGenerateAiQuiz} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 bg-slate-50/70 p-4 rounded-xl border border-slate-200">
                 <div>
                   <label className="text-xs font-bold text-slate-700">Course / Subject</label>
                   <select
                     value={aiSubjectId}
-                    onChange={e => setAiSubjectId(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 py-2 px-3 text-xs focus:border-brand-500 focus:outline-none"
+                    onChange={e => {
+                      setAiSubjectId(e.target.value);
+                      setAiModuleId('');
+                    }}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs focus:border-brand-500 focus:outline-none"
                   >
                     {subjects.map(s => (
                       <option key={s.id} value={s.id}>
@@ -337,13 +452,29 @@ export const QuizzesPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs font-bold text-slate-700">Module / Topic</label>
+                  <label className="text-xs font-bold text-slate-700">Module (Optional)</label>
+                  <select
+                    value={aiModuleId}
+                    onChange={e => setAiModuleId(e.target.value)}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs focus:border-brand-500 focus:outline-none"
+                  >
+                    <option value="">All Modules / General</option>
+                    {(subjects.find(s => s.id === aiSubjectId)?.modules || []).map((m, idx) => (
+                      <option key={m.id} value={m.id}>
+                        Module {idx + 1}: {m.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Topic</label>
                   <input
                     required
                     value={aiTopic}
                     onChange={e => setAiTopic(e.target.value)}
-                    placeholder="e.g. Distributed Consensus & CAP Theorem"
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 py-2 px-3 text-xs focus:border-brand-500 focus:outline-none"
+                    placeholder="e.g. Graph Traversal / Trees"
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs focus:border-brand-500 focus:outline-none"
                   />
                 </div>
 
@@ -352,11 +483,23 @@ export const QuizzesPage: React.FC = () => {
                   <select
                     value={aiDifficulty}
                     onChange={e => setAiDifficulty(e.target.value as any)}
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 py-2 px-3 text-xs focus:border-brand-500 focus:outline-none"
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs focus:border-brand-500 focus:outline-none"
                   >
-                    <option value="EASY">Easy (Definitions & Concepts)</option>
-                    <option value="MEDIUM">Medium (Application & Analysis)</option>
-                    <option value="HARD">Hard (Advanced Edge Cases & Proofs)</option>
+                    <option value="EASY">Easy</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HARD">Hard</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Question Type</label>
+                  <select
+                    value={aiQuestionType}
+                    onChange={e => setAiQuestionType(e.target.value as any)}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs focus:border-brand-500 focus:outline-none"
+                  >
+                    <option value="MCQ">Multiple Choice (MCQ)</option>
+                    <option value="TRUE_FALSE">True / False</option>
                   </select>
                 </div>
 
@@ -365,7 +508,7 @@ export const QuizzesPage: React.FC = () => {
                   <select
                     value={aiQuestionCount}
                     onChange={e => setAiQuestionCount(Number(e.target.value))}
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 py-2 px-3 text-xs focus:border-brand-500 focus:outline-none"
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs focus:border-brand-500 focus:outline-none"
                   >
                     <option value={3}>3 Questions</option>
                     <option value={5}>5 Questions</option>
@@ -374,14 +517,14 @@ export const QuizzesPage: React.FC = () => {
                   </select>
                 </div>
 
-                <div className="sm:col-span-2 flex justify-end pt-2">
+                <div className="sm:col-span-2 md:col-span-3 flex justify-end pt-1">
                   <button
                     type="submit"
                     disabled={aiGenerating || !aiTopic.trim()}
                     className="inline-flex items-center rounded-xl bg-purple-600 px-5 py-2 text-xs font-bold text-white shadow-sm hover:bg-purple-700 disabled:opacity-50 transition"
                   >
-                    <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-                    {aiGenerating ? 'Consulting Question Bank & Gemini...' : 'Generate Questions'}
+                    <Sparkles className={`mr-1.5 h-3.5 w-3.5 ${aiGenerating ? 'animate-spin' : ''}`} />
+                    {aiGenerating ? 'Generating with Gemini...' : 'Generate Questions'}
                   </button>
                 </div>
               </form>
@@ -393,7 +536,7 @@ export const QuizzesPage: React.FC = () => {
                   <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
                     <div className="flex items-center space-x-3">
                       <span className="font-bold text-slate-800">
-                        {aiGeneratedData.questions.length} Questions Ready
+                        {aiGeneratedData.questions.length} Questions
                       </span>
                       {aiGeneratedData.reusedFromBank > 0 && (
                         <span className="inline-flex items-center rounded-md bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800">
@@ -420,55 +563,187 @@ export const QuizzesPage: React.FC = () => {
                     <input
                       value={aiQuizTitle}
                       onChange={e => setAiQuizTitle(e.target.value)}
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs focus:border-brand-500 focus:outline-none"
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs focus:border-brand-500 focus:outline-none font-medium"
                     />
                   </div>
 
-                  {/* List of Questions */}
-                  <div className="space-y-4 max-h-[350px] overflow-y-auto pr-1">
-                    {aiGeneratedData.questions.map((q: any, idx: number) => (
-                      <div key={idx} className="rounded-xl border border-slate-200 p-4 text-xs space-y-2.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="font-bold text-slate-900">
-                            {idx + 1}. {q.question}
-                          </p>
-                          <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">
-                            {q.difficulty}
-                          </span>
-                        </div>
+                  {/* List of Questions with Edit / Delete / Regenerate */}
+                  <div className="space-y-4 max-h-[420px] overflow-y-auto pr-1">
+                    {aiGeneratedData.questions.map((q: any, idx: number) => {
+                      const isEditing = editingIndex === idx;
+                      const isRegenerating = regeneratingIndex === idx;
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          {q.options.map((opt: string, optIdx: number) => (
-                            <div
-                              key={optIdx}
-                              className={`p-2 rounded-lg border text-xs ${
-                                opt === q.correctAnswer
-                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-900 font-semibold'
-                                  : 'border-slate-200 bg-white text-slate-700'
-                              }`}
-                            >
-                              <span className="font-mono text-[11px] text-slate-400 mr-1.5">
-                                {String.fromCharCode(65 + optIdx)}.
-                              </span>
-                              {opt}
-                              {opt === q.correctAnswer && (
-                                <Check className="inline h-3.5 w-3.5 ml-1 text-emerald-600" />
-                              )}
+                      return (
+                        <div
+                          key={idx}
+                          className={`rounded-xl border p-4 text-xs space-y-3 transition ${
+                            isEditing
+                              ? 'border-brand-500 bg-blue-50/20 shadow-sm'
+                              : 'border-slate-200 bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          {isEditing ? (
+                            /* INLINE EDIT MODE */
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-brand-700">Editing Question #{idx + 1}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingIndex(null)}
+                                  className="inline-flex items-center rounded-lg bg-brand-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-brand-700"
+                                >
+                                  <Check className="mr-1 h-3 w-3" /> Done
+                                </button>
+                              </div>
+
+                              <div>
+                                <label className="text-[11px] font-semibold text-slate-600">Question Text</label>
+                                <textarea
+                                  rows={2}
+                                  value={q.question}
+                                  onChange={e => handleUpdateQuestion(idx, { question: e.target.value })}
+                                  className="mt-1 w-full rounded-lg border border-slate-200 p-2 text-xs focus:border-brand-500 focus:outline-none"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                                  Options (Select the radio to mark the correct answer)
+                                </label>
+                                <div className="space-y-2">
+                                  {(q.options || []).map((opt: string, optIdx: number) => (
+                                    <div key={optIdx} className="flex items-center space-x-2">
+                                      <input
+                                        type="radio"
+                                        name={`correct-${idx}`}
+                                        checked={q.correctAnswer === opt}
+                                        onChange={() => handleUpdateQuestion(idx, { correctAnswer: opt })}
+                                        className="accent-emerald-600 h-4 w-4 shrink-0"
+                                      />
+                                      <input
+                                        type="text"
+                                        value={opt}
+                                        onChange={e => {
+                                          const newOpts = [...q.options];
+                                          const oldVal = newOpts[optIdx];
+                                          newOpts[optIdx] = e.target.value;
+                                          const update: any = { options: newOpts };
+                                          if (q.correctAnswer === oldVal) {
+                                            update.correctAnswer = e.target.value;
+                                          }
+                                          handleUpdateQuestion(idx, update);
+                                        }}
+                                        className="flex-1 rounded-lg border border-slate-200 py-1.5 px-2.5 text-xs focus:border-brand-500 focus:outline-none"
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div>
+                                <label className="text-[11px] font-semibold text-slate-600">Explanation</label>
+                                <input
+                                  type="text"
+                                  value={q.explanation || ''}
+                                  onChange={e => handleUpdateQuestion(idx, { explanation: e.target.value })}
+                                  placeholder="Explanation for the correct answer..."
+                                  className="mt-1 w-full rounded-lg border border-slate-200 py-1.5 px-2.5 text-xs focus:border-brand-500 focus:outline-none"
+                                />
+                              </div>
                             </div>
-                          ))}
-                        </div>
+                          ) : (
+                            /* DISPLAY / REVIEW MODE */
+                            <div>
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="font-bold text-slate-900 leading-snug">
+                                  <span className="text-slate-400 mr-1.5">#{idx + 1}</span>
+                                  {q.question}
+                                </p>
+                                <div className="flex items-center space-x-1.5 shrink-0">
+                                  <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                                    {q.difficulty}
+                                  </span>
+                                </div>
+                              </div>
 
-                        {q.explanation && (
-                          <p className="text-[11px] text-slate-500 italic bg-slate-50 p-2 rounded-lg">
-                            💡 <strong>Explanation:</strong> {q.explanation}
-                          </p>
-                        )}
-                      </div>
-                    ))}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2.5">
+                                {(q.options || []).map((opt: string, optIdx: number) => {
+                                  const isCorrect = opt === q.correctAnswer;
+                                  return (
+                                    <div
+                                      key={optIdx}
+                                      className={`p-2 rounded-lg border text-xs flex items-center justify-between ${
+                                        isCorrect
+                                          ? 'border-emerald-300 bg-emerald-50 text-emerald-900 font-semibold'
+                                          : 'border-slate-200 bg-white text-slate-700'
+                                      }`}
+                                    >
+                                      <div className="flex items-center overflow-hidden">
+                                        <span className="font-mono text-[11px] text-slate-400 mr-1.5 shrink-0">
+                                          {String.fromCharCode(65 + optIdx)}.
+                                        </span>
+                                        <span className="truncate">{opt}</span>
+                                      </div>
+                                      {isCorrect && (
+                                        <Check className="h-3.5 w-3.5 ml-1 text-emerald-600 shrink-0" />
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {q.explanation && (
+                                <p className="text-[11px] text-slate-600 italic bg-slate-50 p-2 rounded-lg mt-2.5 border border-slate-100">
+                                  💡 <strong>Explanation:</strong> {q.explanation}
+                                </p>
+                              )}
+
+                              {/* Question Action Bar */}
+                              <div className="mt-3 flex items-center justify-end space-x-2 border-t border-slate-100 pt-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingIndex(idx)}
+                                  className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition"
+                                >
+                                  <Pencil className="mr-1 h-3 w-3" /> Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isRegenerating || regeneratingIndex !== null}
+                                  onClick={() => handleRegenerateQuestion(idx)}
+                                  className="inline-flex items-center rounded-lg border border-purple-200 bg-purple-50 px-2.5 py-1 text-[11px] font-medium text-purple-700 hover:bg-purple-100 transition disabled:opacity-50"
+                                >
+                                  <RefreshCw className={`mr-1 h-3 w-3 ${isRegenerating ? 'animate-spin' : ''}`} />
+                                  {isRegenerating ? 'Regenerating...' : 'Regenerate'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteQuestion(idx)}
+                                  className="inline-flex items-center rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100 transition"
+                                >
+                                  <Trash2 className="mr-1 h-3 w-3" /> Delete
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
 
-                  {/* Save as Quiz Button */}
-                  <div className="border-t border-slate-100 pt-3 flex justify-end space-x-2">
+                  {/* Add Manual Question Button */}
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={handleAddManualQuestion}
+                      className="w-full py-2.5 rounded-xl border border-dashed border-purple-300 bg-purple-50/50 hover:bg-purple-50 text-purple-700 text-xs font-semibold flex items-center justify-center transition"
+                    >
+                      <Plus className="mr-1.5 h-3.5 w-3.5" /> Add Manual Question
+                    </button>
+                  </div>
+
+                  {/* Modal Action Buttons: Cancel, Save as Draft, Publish */}
+                  <div className="border-t border-slate-100 pt-4 flex flex-wrap items-center justify-between gap-2">
                     <button
                       type="button"
                       onClick={() => setShowAiModal(false)}
@@ -476,15 +751,26 @@ export const QuizzesPage: React.FC = () => {
                     >
                       Cancel
                     </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveAsLiveQuiz}
-                      disabled={savingQuiz || !aiQuizTitle.trim()}
-                      className="inline-flex items-center rounded-xl bg-brand-600 px-5 py-2 text-xs font-bold text-white shadow-sm hover:bg-brand-700 disabled:opacity-50 transition"
-                    >
-                      <Plus className="mr-1.5 h-3.5 w-3.5" />
-                      {savingQuiz ? 'Publishing Quiz...' : 'Publish to Live Quizzes'}
-                    </button>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => handleSaveQuiz(false)}
+                        disabled={savingQuiz || !aiQuizTitle.trim() || aiGeneratedData.questions.length === 0}
+                        className="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition shadow-xs"
+                      >
+                        <FileText className="mr-1.5 h-3.5 w-3.5 text-slate-500" />
+                        {savingQuiz ? 'Saving...' : 'Save as Draft'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveQuiz(true)}
+                        disabled={savingQuiz || !aiQuizTitle.trim() || aiGeneratedData.questions.length === 0}
+                        className="inline-flex items-center rounded-xl bg-brand-600 px-5 py-2 text-xs font-bold text-white shadow-sm hover:bg-brand-700 disabled:opacity-50 transition"
+                      >
+                        <Check className="mr-1.5 h-3.5 w-3.5" />
+                        {savingQuiz ? 'Publishing...' : 'Publish to Live Quizzes'}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

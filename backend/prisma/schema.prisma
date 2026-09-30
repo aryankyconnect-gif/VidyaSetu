@@ -276,7 +276,8 @@ model Assignment {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  submissions      AssignmentSubmission[]
+  submissions        AssignmentSubmission[]
+  similarities       SubmissionSimilarity[]
 }
 
 model AssignmentSubmission {
@@ -287,6 +288,8 @@ model AssignmentSubmission {
   student          StudentProfile   @relation(fields: [studentId], references: [id], onDelete: Cascade)
   fileUrl          String?
   content          String?
+  extractedText    String?          // Extracted & normalized text from PDF / text input
+  extractionStatus String?          // SUCCESS, EMPTY, SCANNED_IMAGE, FAILED
   similarityScore  Float?           // percentage e.g. 14.5%
   similarityReport String?          // description e.g. "Low similarity - Original work"
   status           SubmissionStatus @default(SUBMITTED)
@@ -294,8 +297,27 @@ model AssignmentSubmission {
   updatedAt        DateTime         @updatedAt
 
   grade            Grade?
+  similaritiesA    SubmissionSimilarity[] @relation("SubmissionSimilarityA")
+  similaritiesB    SubmissionSimilarity[] @relation("SubmissionSimilarityB")
 
   @@unique([assignmentId, studentId])
+}
+
+model SubmissionSimilarity {
+  id                  String               @id @default(uuid())
+  assignmentId        String
+  assignment          Assignment           @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  submissionAId       String
+  submissionA         AssignmentSubmission @relation("SubmissionSimilarityA", fields: [submissionAId], references: [id], onDelete: Cascade)
+  submissionBId       String
+  submissionB         AssignmentSubmission @relation("SubmissionSimilarityB", fields: [submissionBId], references: [id], onDelete: Cascade)
+  similarityScore     Float                // 0 - 100 percentage
+  riskLevel           String               // HIGH, MEDIUM, LOW
+  matchedPassagesJson String?              // JSON array of matching passages
+  calculatedAt        DateTime             @default(now())
+
+  @@unique([submissionAId, submissionBId])
+  @@index([assignmentId])
 }
 
 model Grade {
